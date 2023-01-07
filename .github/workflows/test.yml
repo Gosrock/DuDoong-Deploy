@@ -1,0 +1,29 @@
+name: Deployment
+on: push
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: echo 'run tests'
+
+  deploy-dev:
+    name: Deploy(Dev)
+    needs: test
+    runs-on: ubuntu-latest
+     environment: DuDoong-Staging
+    steps:
+      - uses: actions/checkout@v2
+      - run: echo ${{ secrets.CURRENT_ENV }}
+      
+
+  deploy-production:
+    name: Deploy(Production)
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    environment: DuDoong-Production
+    steps:
+      - uses: actions/checkout@v2
+      - run: echo ${{ secrets.CURRENT_ENV }}
