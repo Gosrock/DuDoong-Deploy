@@ -13,11 +13,10 @@ jobs:
     name: Deploy(Dev)
     needs: test
     runs-on: ubuntu-latest
-     environment: DuDoong-Staging
+    environment: DuDoong-Staging
     steps:
       - uses: actions/checkout@v2
       - run: echo ${{ secrets.CURRENT_ENV }}
-      
 
   deploy-production:
     name: Deploy(Production)
