@@ -14,7 +14,7 @@ services:
     container_name: front
     network_mode: "host"
   admin:
-    image: david0218/dudoong-admin:dev
+    image: david0218/dudoong-admin:fix-admin-deploy
     container_name: admin
     network_mode: "host"
     # docker build water0641/ticket-nginx-22th:1.0.3 --platform linux/amd64 .
