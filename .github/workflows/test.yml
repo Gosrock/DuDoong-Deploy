@@ -1,28 +1,94 @@
 name: Deployment
-on: push
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - run: echo 'run tests'
-
-  deploy-dev:
-    name: Deploy(Dev)
-    needs: test
+  deploy-staging:
+    name: Deploy(Staging)
     runs-on: ubuntu-latest
     environment: DuDoong-Staging
     steps:
-      - uses: actions/checkout@v2
-      - run: echo ${{ secrets.CURRENT_ENV }}
+      - name: checkout
+        uses: actions/checkout@master
+
+      - name: create env file
+        run: |
+          touch .env
+          echo "${{ secrets.ENV_VARS }}" >> .env
+      - name: create remote directory
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ubuntu
+          key: ${{ secrets.KEY }}
+          script: mkdir -p ~/srv/ubuntu
+
+      - name: copy source via ssh key
+        uses: burnett01/rsync-deployments@4.1
+        with:
+          switches: -avzr --delete
+          remote_path: ~/srv/ubuntu/
+          remote_host: ${{ secrets.HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.KEY }}
+      - name: executing remote ssh commands using password
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ubuntu
+          key: ${{ secrets.KEY }}
+          envs:
+          script: |
+            sh ~/srv/ubuntu/docker-install.sh
+            echo "start docker-compose up: ubuntu"
+            sudo docker-compose -v
+            cat ~/srv/ubuntu/.env
+            sudo docker-compose -f ~/srv/ubuntu/docker-compose.yml pull
+            sudo docker-compose -f ~/srv/ubuntu/docker-compose.yml --env-file ~/srv/ubuntu/.env up --build -d
 
   deploy-production:
     name: Deploy(Production)
-    needs: deploy-dev
+    needs: deploy-staging
     runs-on: ubuntu-latest
     environment: DuDoong-Production
     steps:
-      - uses: actions/checkout@v2
-      - run: echo ${{ secrets.CURRENT_ENV }}
+      - name: checkout
+        uses: actions/checkout@master
+
+      - name: create env file
+        run: |
+          touch .env
+          echo "${{ secrets.ENV_VARS }}" >> .env
+      - name: create remote directory
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ubuntu
+          key: ${{ secrets.KEY }}
+          script: mkdir -p ~/srv/ubuntu
+
+      - name: copy source via ssh key
+        uses: burnett01/rsync-deployments@4.1
+        with:
+          switches: -avzr --delete
+          remote_path: ~/srv/ubuntu/
+          remote_host: ${{ secrets.HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.KEY }}
+      - name: executing remote ssh commands using password
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ubuntu
+          key: ${{ secrets.KEY }}
+          envs:
+          script: |
+            sh ~/srv/ubuntu/docker-install.sh
+            echo "start docker-compose up: ubuntu"
+            sudo docker-compose -v
+            cat ~/srv/ubuntu/.env
+            sudo docker-compose -f ~/srv/ubuntu/docker-compose.yml pull
+            sudo docker-compose -f ~/srv/ubuntu/docker-compose.yml --env-file ~/srv/ubuntu/.env up --build -d

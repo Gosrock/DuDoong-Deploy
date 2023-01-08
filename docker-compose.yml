@@ -1,0 +1,28 @@
+version: "3.7"
+services:
+  redis:
+    image: "redis:alpine"
+    network_mode: "host"
+  backend:
+    image: water0641/dudoong-api:0.0.1-1
+    container_name: backend
+    env_file:
+      - .env
+    network_mode: "host"
+  front:
+    image: david0218/dudoong-ticket:dev
+    container_name: front
+    network_mode: "host"
+  admin:
+    image: david0218/dudoong-admin:dev
+    container_name: admin
+    network_mode: "host"
+    # docker build water0641/ticket-nginx-22th:1.0.3 --platform linux/amd64 .
+  nginx:
+    network_mode: "host"
+    depends_on:
+      - backend
+      - front
+      - admin
+    restart: always
+    image: water0641/dudoong-nginx:1.0.0
