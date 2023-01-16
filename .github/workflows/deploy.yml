@@ -49,7 +49,7 @@ jobs:
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.yml pull
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.yml --env-file ~/srv/ubuntu/.env up --build -d
             echo "prune images"
-            sudo docker system prune -f
+            sudo docker system prune --all -f
 
   deploy-production:
     name: Deploy(Production)
@@ -95,4 +95,4 @@ jobs:
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.yml pull
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.yml --env-file ~/srv/ubuntu/.env up --build -d
             echo "prune images"
-            sudo docker system prune -f
+            sudo docker system prune --all -f
