@@ -10,7 +10,7 @@ services:
       - .env
     network_mode: "host"
   front:
-    image: david0218/dudoong-ticket:0.0.3-3
+    image: david0218/dudoong-ticket:0.0.3-4
     container_name: front
     network_mode: "host"
   admin:
