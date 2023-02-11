@@ -9,14 +9,20 @@ services:
     env_file:
       - .env
     network_mode: "host"
+    environment:
+      - TZ=Asia/Seoul
   front:
     image: david0218/dudoong-ticket:0.0.3-6
     container_name: front
     network_mode: "host"
+    environment:
+      - TZ=Asia/Seoul
   admin:
     image: david0218/dudoong-admin:0.0.2-2
     container_name: admin
     network_mode: "host"
+    environment:
+      - TZ=Asia/Seoul
     # docker build water0641/ticket-nginx-22th:1.0.3 --platform linux/amd64 .
   nginx:
     network_mode: "host"
@@ -26,3 +32,5 @@ services:
       - admin
     restart: always
     image: water0641/dudoong-nginx:1.0.5
+    environment:
+      - TZ=Asia/Seoul
