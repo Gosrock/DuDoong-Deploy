@@ -12,7 +12,7 @@ services:
     environment:
       - TZ=Asia/Seoul
   front:
-    image: david0218/dudoong-ticket:0.0.3-6
+    image: david0218/dudoong-ticket:0.0.4
     container_name: front
     network_mode: "host"
     environment:
