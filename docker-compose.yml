@@ -12,13 +12,13 @@ services:
     environment:
       - TZ=Asia/Seoul
   front:
-    image: david0218/dudoong-ticket:0.0.4
+    image: david0218/dudoong-ticket:0.0.4-1
     container_name: front
     network_mode: "host"
     environment:
       - TZ=Asia/Seoul
   admin:
-    image: david0218/dudoong-admin:0.0.2-2
+    image: david0218/dudoong-admin:0.0.4-1
     container_name: admin
     network_mode: "host"
     environment:
