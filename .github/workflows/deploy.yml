@@ -46,8 +46,8 @@ jobs:
             echo "start docker-compose up: ubuntu"
             sudo docker-compose -v
             cat ~/srv/ubuntu/.env
-            sudo docker-compose -f ~/srv/ubuntu/docker-compose.yml pull
-            sudo docker-compose -f ~/srv/ubuntu/docker-compose.yml --env-file ~/srv/ubuntu/.env up --build -d
+            sudo docker-compose -f ~/srv/ubuntu/docker-compose.staging.yml pull
+            sudo docker-compose -f ~/srv/ubuntu/docker-compose.staging.yml --env-file ~/srv/ubuntu/.env up --build -d
             echo "prune images"
             sudo docker system prune --all -f
 
@@ -92,7 +92,7 @@ jobs:
             echo "start docker-compose up: ubuntu"
             sudo docker-compose -v
             cat ~/srv/ubuntu/.env
-            sudo docker-compose -f ~/srv/ubuntu/docker-compose.yml pull
-            sudo docker-compose -f ~/srv/ubuntu/docker-compose.yml --env-file ~/srv/ubuntu/.env up --build -d
+            sudo docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml pull
+            sudo docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml --env-file ~/srv/ubuntu/.env up --build -d
             echo "prune images"
             sudo docker system prune --all -f
