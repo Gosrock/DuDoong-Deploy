@@ -4,7 +4,7 @@ services:
     image: "redis:alpine"
     network_mode: "host"
   backend:
-    image: water0641/dudoong-api:1.0.2-3
+    image: water0641/dudoong-api:1.0.2-4
     container_name: backend
     env_file:
       - .env
