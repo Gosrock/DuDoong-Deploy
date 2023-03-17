@@ -18,7 +18,7 @@ services:
         awslogs-region: "ap-northeast-2"
         awslogs-stream: "backend"
   front:
-    image: david0218/dudoong-ticket:1.0.1-2
+    image: david0218/dudoong-ticket:1.0.1-3
     container_name: front
     network_mode: "host"
     environment:
