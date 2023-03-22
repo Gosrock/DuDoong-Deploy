@@ -4,7 +4,7 @@ services:
     image: "redis:alpine"
     network_mode: "host"
   backend:
-    image: water0641/dudoong-api:1.0.3
+    image: water0641/dudoong-api:1.0.3-1
     container_name: backend
     env_file:
       - .env
@@ -18,7 +18,7 @@ services:
         awslogs-region: "ap-northeast-2"
         awslogs-stream: "backend"
   front:
-    image: david0218/dudoong-ticket:1.1.0
+    image: david0218/dudoong-ticket:1.1.0-1
     container_name: front
     network_mode: "host"
     environment:
