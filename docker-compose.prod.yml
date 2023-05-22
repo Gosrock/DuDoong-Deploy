@@ -24,7 +24,7 @@ services:
     environment:
       - TZ=Asia/Seoul
   admin:
-    image: david0218/dudoong-admin:1.0.1
+    image: david0218/dudoong-admin:1.1.0
     container_name: admin
     network_mode: "host"
     environment:
