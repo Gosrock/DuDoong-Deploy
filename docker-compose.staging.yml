@@ -17,12 +17,12 @@ services:
     network_mode: "host"
     environment:
       - TZ=Asia/Seoul
-  admin:
-    image: david0218/dudoong-admin:dev
-    container_name: admin
-    network_mode: "host"
-    environment:
-      - TZ=Asia/Seoul
+  # admin:
+    # image: david0218/dudoong-admin:dev
+    # container_name: admin
+    # network_mode: "host"
+    # environment:
+      # - TZ=Asia/Seoul
     # docker build water0641/ticket-nginx-22th:1.0.3 --platform linux/amd64 .
   nginx:
     network_mode: "host"
