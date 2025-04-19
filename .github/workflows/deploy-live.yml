@@ -1,0 +1,47 @@
+name: Deployment
+
+jobs:
+  deploy-production:
+    name: Deploy(Production)
+    runs-on: ubuntu-latest
+    environment: DuDoong-Production
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+
+      - name: create env file
+        run: |
+          touch .env
+          echo "${{ secrets.ENV_VARS }}" >> .env
+      - name: create remote directory
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ubuntu
+          key: ${{ secrets.KEY }}
+          script: mkdir -p ~/srv/ubuntu
+
+      - name: copy source via ssh key
+        uses: burnett01/rsync-deployments@4.1
+        with:
+          switches: -avzr --delete
+          remote_path: ~/srv/ubuntu/
+          remote_host: ${{ secrets.HOST }}
+          remote_user: ubuntu
+          remote_key: ${{ secrets.KEY }}
+      - name: executing remote ssh commands using password
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ubuntu
+          key: ${{ secrets.KEY }}
+          envs:
+          script: |
+            sh ~/srv/ubuntu/docker-install.sh
+            echo "start docker-compose up: ubuntu"
+            sudo docker-compose -v
+            cat ~/srv/ubuntu/.env
+            sudo docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml pull
+            sudo docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml --env-file ~/srv/ubuntu/.env up --build -d
+            echo "prune images"
+            sudo docker system prune --all -f
