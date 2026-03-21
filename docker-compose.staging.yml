@@ -37,6 +37,6 @@ services:
       - admin
       - internal-admin
     restart: always
-    image: water0641/dudoong-nginx:1.2.0
+    image: water0641/dudoong-nginx:1.3.0
     environment:
       - TZ=Asia/Seoul
