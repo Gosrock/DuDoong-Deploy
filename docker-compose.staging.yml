@@ -23,6 +23,12 @@ services:
     network_mode: "host"
     environment:
       - TZ=Asia/Seoul
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: "dudoong-staging"
+        awslogs-region: "ap-northeast-2"
+        awslogs-stream: "front"
   admin:
     image: david0218/dudoong-admin:dev
     container_name: admin
@@ -46,3 +52,9 @@ services:
     image: water0641/dudoong-nginx:1.3.0
     environment:
       - TZ=Asia/Seoul
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: "dudoong-staging"
+        awslogs-region: "ap-northeast-2"
+        awslogs-stream: "nginx"
