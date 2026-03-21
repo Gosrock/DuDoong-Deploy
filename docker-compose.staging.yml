@@ -23,13 +23,19 @@ services:
     network_mode: "host"
     environment:
       - TZ=Asia/Seoul
-    # docker build water0641/ticket-nginx-22th:1.0.3 --platform linux/amd64 .
+  internal-admin:
+    image: water0641/dudoong-internal-admin:dev
+    container_name: internal-admin
+    network_mode: "host"
+    environment:
+      - TZ=Asia/Seoul
   nginx:
     network_mode: "host"
     depends_on:
       - backend
       - front
       - admin
+      - internal-admin
     restart: always
     image: water0641/dudoong-nginx:1.0.5
     environment:
