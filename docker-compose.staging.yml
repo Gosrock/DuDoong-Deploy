@@ -11,6 +11,12 @@ services:
     network_mode: "host"
     environment:
       - TZ=Asia/Seoul
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: "dudoong-staging"
+        awslogs-region: "ap-northeast-2"
+        awslogs-stream: "backend"
   front:
     image: david0218/dudoong-ticket:dev
     container_name: front
