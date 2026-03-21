@@ -12,14 +12,14 @@ jobs:
     environment: DuDoong-Staging
     steps:
       - name: checkout
-        uses: actions/checkout@master
+        uses: actions/checkout@v4
 
       - name: create env file
         run: |
           touch .env
           echo "${{ secrets.ENV_VARS }}" >> .env
       - name: create remote directory
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
           username: ubuntu
@@ -27,7 +27,7 @@ jobs:
           script: mkdir -p ~/srv/ubuntu
 
       - name: copy source via ssh key
-        uses: burnett01/rsync-deployments@4.1
+        uses: burnett01/rsync-deployments@7.0.1
         with:
           switches: -avzr --delete
           remote_path: ~/srv/ubuntu/
@@ -35,7 +35,7 @@ jobs:
           remote_user: ubuntu
           remote_key: ${{ secrets.KEY }}
       - name: executing remote ssh commands using password
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
           username: ubuntu
@@ -58,14 +58,14 @@ jobs:
     environment: DuDoong-Production
     steps:
       - name: checkout
-        uses: actions/checkout@master
+        uses: actions/checkout@v4
 
       - name: create env file
         run: |
           touch .env
           echo "${{ secrets.ENV_VARS }}" >> .env
       - name: create remote directory
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
           username: ubuntu
@@ -73,7 +73,7 @@ jobs:
           script: mkdir -p ~/srv/ubuntu
 
       - name: copy source via ssh key
-        uses: burnett01/rsync-deployments@4.1
+        uses: burnett01/rsync-deployments@7.0.1
         with:
           switches: -avzr --delete
           remote_path: ~/srv/ubuntu/
@@ -81,7 +81,7 @@ jobs:
           remote_user: ubuntu
           remote_key: ${{ secrets.KEY }}
       - name: executing remote ssh commands using password
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
           username: ubuntu
