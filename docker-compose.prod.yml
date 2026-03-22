@@ -4,7 +4,7 @@ services:
     image: "redis:alpine"
     network_mode: "host"
   backend:
-    image: water0641/dudoong-api:1.0.7-2
+    image: water0641/dudoong-api:2.2.0
     container_name: backend
     env_file:
       - .env
@@ -23,20 +23,44 @@ services:
     network_mode: "host"
     environment:
       - TZ=Asia/Seoul
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: "dudoong-prod"
+        awslogs-region: "ap-northeast-2"
+        awslogs-stream: "front"
   admin:
     image: david0218/dudoong-admin:1.1.2
     container_name: admin
     network_mode: "host"
     environment:
       - TZ=Asia/Seoul
-    # docker build water0641/ticket-nginx-22th:1.0.3 --platform linux/amd64 .
+  internal-admin:
+    image: water0641/dudoong-internal-admin:0.5.0
+    container_name: internal-admin
+    network_mode: "host"
+    environment:
+      - TZ=Asia/Seoul
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: "dudoong-prod"
+        awslogs-region: "ap-northeast-2"
+        awslogs-stream: "internal-admin"
   nginx:
     network_mode: "host"
     depends_on:
       - backend
       - front
       - admin
+      - internal-admin
     restart: always
-    image: water0641/dudoong-nginx:1.0.5
+    image: water0641/dudoong-nginx:1.4.0
     environment:
       - TZ=Asia/Seoul
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: "dudoong-prod"
+        awslogs-region: "ap-northeast-2"
+        awslogs-stream: "nginx"
