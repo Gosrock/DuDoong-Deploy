@@ -4,7 +4,7 @@ services:
     image: "redis:alpine"
     network_mode: "host"
   backend:
-    image: water0641/dudoong-api:2.2.0
+    image: water0641/dudoong-api:2.2.2
     container_name: backend
     env_file:
       - .env
@@ -55,7 +55,7 @@ services:
       - admin
       - internal-admin
     restart: always
-    image: water0641/dudoong-nginx:1.4.0
+    image: water0641/dudoong-nginx:1.7.0
     environment:
       - TZ=Asia/Seoul
     logging:
