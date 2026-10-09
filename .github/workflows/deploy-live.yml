@@ -7,6 +7,10 @@ jobs:
     name: Deploy(Production)
     runs-on: ubuntu-latest
     environment: DuDoong-Production
+    # deploy.yml 의 운영 job 과 같은 그룹 → 운영 서버 배포가 겹치지 않는다. 스테이징 대기는 기다리지 않는다
+    concurrency:
+      group: deploy-production-server
+      cancel-in-progress: false
     steps:
       - name: checkout
         uses: actions/checkout@master

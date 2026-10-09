@@ -14,6 +14,10 @@ jobs:
     name: Deploy(Staging)
     runs-on: ubuntu-latest
     environment: DuDoong-Staging
+    # 연속 머지로 배포가 겹치면 같은 서버에서 rsync·compose 가 섞인다 → 서버별로 하나씩
+    concurrency:
+      group: deploy-staging-server
+      cancel-in-progress: false
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -95,10 +99,11 @@ jobs:
           host: ${{ env.STAGING_HOST }}
           username: ubuntu
           key: ${{ secrets.KEY }}
-          command_timeout: 10m
+          command_timeout: 15m
+          # t3.micro 에서 컨테이너 6개가 뜨는 데 몇 분 걸린다 → 최대 10분 기다린다
           script: |
-            for i in $(seq 1 30); do
-              code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost/api/v1/examples/health || true)
+            for i in $(seq 1 60); do
+              code=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' http://localhost/api/v1/examples/health || true)
               echo "try $i: $code"
               [ "$code" = "200" ] && exit 0
               sleep 10
@@ -112,6 +117,10 @@ jobs:
     needs: deploy-staging
     runs-on: ubuntu-latest
     environment: DuDoong-Production
+    # deploy-live 와 같은 그룹: 운영 서버 배포는 한 번에 하나 (스테이징 대기와는 무관)
+    concurrency:
+      group: deploy-production-server
+      cancel-in-progress: false
     steps:
       - name: checkout
         uses: actions/checkout@v4
