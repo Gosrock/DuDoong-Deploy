@@ -29,7 +29,7 @@ scp -i <스테이징 키> ubuntu@<스테이징 IP>:~/srv/ubuntu/.env ./staging.e
 ssh -i <센터 키> ubuntu@<센터 IP> 'sudo cat /root/dudoong/.env.prod' > ./batch.env
 ```
 
-- 운영·스테이징은 **지금 서버에 실제로 쓰이는 파일**을 그대로 올린다 (GitHub `ENV_VARS` 원문과 다를 수 있다 — 서버 파일이 기준)
+- 운영·스테이징은 **지금 서버에 실제로 쓰이는 파일**을 그대로 올린다
 - 배치 파일의 Redis 줄은 그대로 둬도 된다 (태스크가 사이드카로 덮어쓴다)
 
 ## 2. AWS CloudShell (관리자 계정)
@@ -71,7 +71,6 @@ rm -f ~/prod.env ~/staging.env ~/batch.env && ls ~/*.env 2>/dev/null || echo "�
 ## 4. 확인
 
 - 다음 배포 로그에 `.env: SSM /dudoong/env/staging 사용`, `... /dudoong/env/prod 사용` 이 나오면 서버 이관 끝
-- 확인되면 GitHub Environment `DuDoong-Staging`·`DuDoong-Production` 의 `ENV_VARS` secret 을 지운다 (그 전까지는 SSM 이 없을 때 대신 쓰인다)
 - 스테이징 자동 종료 켜기: SSM `/dudoong/infra/staging-auto-stop-state` = `ENABLED` (대문자) → `cf dudoong-staging-control staging-control.yml` 다시 실행
 - SSM 값만 바꾸면 자동 반영되지 않는다: 앱 `.env` 는 다음 배포 때, 배치 값은 Actions "Infra Deploy (batch)" 수동 실행, 그 밖의 스택은 `cf ...` 다시 실행
 - 스테이징 수동 켜기·끄기: Actions → "Staging Power" (status / start / stop). 켜기는 서버만 켜고, 새 코드 반영은 Deployment
