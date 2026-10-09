@@ -1,0 +1,45 @@
+name: Batch Image Copy (Docker Hub → ECR)
+# Fargate 배치가 쓸 이미지를 ECR 로 복사한다 (Docker Hub 익명 pull 제한 회피, 태그 고정)
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: water0641/dudoong-batch 태그
+        required: true
+        default: 1.0.5-1
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    environment: DuDoong-Infra
+    steps:
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-northeast-2
+          mask-aws-account-id: true
+
+      - name: login to ecr
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: copy image
+        env:
+          TAG: ${{ inputs.tag }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          if aws ecr describe-images --repository-name dudoong-batch --image-ids imageTag="$TAG" > /dev/null 2>&1; then
+            echo "이미 ECR에 있음: $TAG (태그 변경 불가 저장소라 건너뜀)"
+            exit 0
+          fi
+          docker pull --platform linux/amd64 "water0641/dudoong-batch:$TAG"
+          # 공급망 확인용: 복사한 이미지 digest 를 남긴다 (ECR 은 푸시 때 취약점 스캔)
+          echo "digest: $(docker inspect --format '{{index .RepoDigests 0}}' "water0641/dudoong-batch:$TAG")"
+          docker tag "water0641/dudoong-batch:$TAG" "$REGISTRY/dudoong-batch:$TAG"
+          docker push -q "$REGISTRY/dudoong-batch:$TAG" > /dev/null
+          echo "ECR 복사 완료: dudoong-batch:$TAG"

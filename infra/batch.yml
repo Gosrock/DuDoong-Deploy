@@ -1,0 +1,417 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  두둥 배치를 센터(Jenkins) 대신 ECS Fargate 예약 작업으로 실행한다 (WorkBook EP09 4단계, Deploy #25).
+  실행할 때만 과금된다. 배치는 시작할 때 Redis 연결이 필요해 같은 태스크에 Redis 사이드카를 둔다.
+
+# 배포: Actions "Infra Deploy (batch)" (main 머지 시 자동) 또는 쓰기 권한 계정으로
+#   aws cloudformation deploy --stack-name dudoong-batch --template-file infra/batch.yml \
+#     --capabilities CAPABILITY_NAMED_IAM --parameter-overrides \
+#     VpcId=<VPC> SubnetIds=<서브넷1,서브넷2> RdsSecurityGroupId=<RDS 보안그룹> [SchedulesState=ENABLED]
+# 첫 배포 뒤: 출력의 EnvBucketName 에 env 파일을 batch.env 로 올리고, ECR 에 이미지를 복사한다 (README 런북).
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: 퍼블릭 서브넷 (NAT 없음 → 태스크에 퍼블릭 IP를 붙여 ECR·Slack 등에 나간다)
+  RdsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: RDS 보안그룹. 배치 보안그룹에서 3306 접속을 허용하는 규칙을 이 스택이 추가한다
+  BatchImageTag:
+    Type: String
+    Default: 1.0.5-1
+    Description: ECR dudoong-batch 이미지 태그 (지금 Jenkins와 같은 2023-07 빌드)
+  SchedulesState:
+    Type: String
+    AllowedValues: [ENABLED, DISABLED]
+    Default: DISABLED
+    Description: 예약 실행 켜기. 수동 실행으로 확인한 뒤 Jenkins 작업을 끄고 ENABLED 로 바꾼다
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: 배치 실패 알림 받을 이메일 (비우면 알림 구독 없음)
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+
+Resources:
+  # env 파일(.env.prod 그대로)을 두는 비공개 버킷. 시크릿은 git에 넣지 않는다
+  EnvBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      # 시크릿을 바꾼 뒤 옛 버전이 무기한 남지 않게
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-env-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+
+  EnvBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref EnvBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt EnvBucket.Arn
+              - !Sub ${EnvBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  Repository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: dudoong-batch
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"태그 없는 이미지만 정리 (쓰는 태그는 지우지 않는다)","selection":{"tagStatus":"untagged","countType":"sinceImagePushed","countUnit":"days","countNumber":7},"action":{"type":"expire"}}]}
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: dudoong-batch
+      # CapacityProviders 는 두지 않는다: RunTask 가 LaunchType FARGATE 를 쓰고,
+      # ECS 를 처음 쓰는 계정에서 서비스 연결 역할 전파 전에 붙이면 생성이 실패할 수 있다
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /dudoong/batch
+      RetentionInDays: 30
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dudoong-batch-execution
+      PermissionsBoundary: !Sub arn:aws:iam::${AWS::AccountId}:policy/dudoong-batch-boundary
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-env-file
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub ${EnvBucket.Arn}/batch.env
+              - Effect: Allow
+                Action: s3:GetBucketLocation
+                Resource: !GetAtt EnvBucket.Arn
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: dudoong batch fargate tasks (outbound only)
+      VpcId: !Ref VpcId
+      # 인바운드 없음. 아웃바운드는 보안그룹 기본값(전체 허용)
+
+  RdsIngressFromBatch:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RdsSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref TaskSecurityGroup
+      Description: dudoong batch fargate
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: dudoong-batch
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "512"
+      Memory: "1024"
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: app
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/dudoong-batch:${BatchImageTag}
+          Essential: true
+          # 이미지 원래 ENTRYPOINT 와 같은 java 옵션. 실행마다 BATCH_ARGS 만 바꾼다.
+          # BATCH_ARGS 안의 자리표시자 $TODAY(KST yyyy-MM-dd), $RUN_ID(epoch 초)만 글자 그대로 바꾸고,
+          # 셸로 해석(eval)하지 않는다 → 인자에 명령이 섞여도 실행되지 않는다.
+          # 이미지에 시간대 파일이 없어 POSIX 표기 KST-9 를 쓴다
+          EntryPoint: ["sh", "-c"]
+          Command:
+            - 'set -f; TODAY=$(TZ=KST-9 date +%F); RUN_ID=$(date +%s); set -- $(printf "%s" "$BATCH_ARGS" | sed -e "s/\$TODAY/$TODAY/g" -e "s/\$RUN_ID/$RUN_ID/g"); exec java -Dspring.profiles.active="$PROFILE" -Djava.security.egd=file:/dev/./urandom -Duser.timezone=Asia/Seoul -jar /app.jar "$@"'
+          EnvironmentFiles:
+            - Type: s3
+              Value: !Sub ${EnvBucket.Arn}/batch.env
+          # environment 는 env 파일보다 우선한다: Redis 는 같은 태스크의 사이드카(비밀번호 없음).
+          # 1.0.5-1 의 Redisson 은 비밀번호 없이 붙으므로 지금 센터 redis 도 비밀번호가 없다 → 같은 조건.
+          # (빈 값은 Fargate 가 버리므로 REDIS_PASSWORD 는 덮어쓰지 않는다)
+          Environment:
+            - Name: REDIS_HOST
+              Value: localhost
+            - Name: REDIS_PORT
+              Value: "6379"
+            - Name: BATCH_ARGS
+              Value: ""
+          DependsOn:
+            - ContainerName: redis
+              Condition: HEALTHY
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: batch
+        - Name: redis
+          Image: public.ecr.aws/docker/library/redis:7-alpine
+          Essential: false
+          HealthCheck:
+            Command: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+            Interval: 5
+            Timeout: 3
+            Retries: 5
+            StartPeriod: 5
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: redis
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dudoong-batch-scheduler
+      PermissionsBoundary: !Sub arn:aws:iam::${AWS::AccountId}:policy/dudoong-batch-boundary
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: run-batch-task
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/dudoong-batch:*
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt ExecutionRole.Arn
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt SchedulerDeadLetterQueue.Arn
+
+  SchedulerDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: dudoong-batch-scheduler-dlq
+      MessageRetentionPeriod: 1209600
+
+  # Jenkins "이벤트_만료처리" (H/30 19-22) 대체
+  EventExpirationSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: dudoong-batch-event-expiration
+      Description: 이벤트_자동만료 — 19~22시 30분마다 (KST)
+      ScheduleExpression: cron(0,30 19-22 * * ? *)
+      ScheduleExpressionTimezone: Asia/Seoul
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: !Ref SchedulesState
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:ecs:runTask
+        RoleArn: !GetAtt SchedulerRole.Arn
+        RetryPolicy:
+          MaximumRetryAttempts: 0
+        # 스케줄러가 태스크를 시작조차 못 하면(권한·서브넷·용량) 여기로 → 알람
+        DeadLetterConfig:
+          Arn: !GetAtt SchedulerDeadLetterQueue.Arn
+        Input: !Sub
+          - >-
+            {"Cluster":"${Cluster}","TaskDefinition":"${TaskDefinition}","LaunchType":"FARGATE",
+            "NetworkConfiguration":{"AwsvpcConfiguration":{"Subnets":["${Subnets}"],"SecurityGroups":["${TaskSecurityGroup}"],"AssignPublicIp":"ENABLED"}},
+            "Overrides":{"ContainerOverrides":[{"Name":"app","Environment":[{"Name":"BATCH_ARGS","Value":"--job.name=이벤트_자동만료 version=$RUN_ID"}]}]}}
+          - Subnets: !Join ['","', !Ref SubnetIds]
+
+  # Jenkins "유저일일통계정보-prod" (30 21 * * *) 대체
+  UserStatisticSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: dudoong-batch-user-statistic
+      Description: 슬랙유저통계 — 매일 21:30 (KST)
+      ScheduleExpression: cron(30 21 * * ? *)
+      ScheduleExpressionTimezone: Asia/Seoul
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: !Ref SchedulesState
+      Target:
+        Arn: arn:aws:scheduler:::aws-sdk:ecs:runTask
+        RoleArn: !GetAtt SchedulerRole.Arn
+        RetryPolicy:
+          MaximumRetryAttempts: 0
+        # 스케줄러가 태스크를 시작조차 못 하면(권한·서브넷·용량) 여기로 → 알람
+        DeadLetterConfig:
+          Arn: !GetAtt SchedulerDeadLetterQueue.Arn
+        Input: !Sub
+          - >-
+            {"Cluster":"${Cluster}","TaskDefinition":"${TaskDefinition}","LaunchType":"FARGATE",
+            "NetworkConfiguration":{"AwsvpcConfiguration":{"Subnets":["${Subnets}"],"SecurityGroups":["${TaskSecurityGroup}"],"AssignPublicIp":"ENABLED"}},
+            "Overrides":{"ContainerOverrides":[{"Name":"app","Environment":[{"Name":"BATCH_ARGS","Value":"--job.name=슬랙유저통계 date=$TODAY"}]}]}}
+          - Subnets: !Join ['","', !Ref SubnetIds]
+
+  # 배치 컨테이너(app)가 0이 아닌 코드로 끝나면 알림
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: dudoong-batch-alert
+
+  AlertTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref AlertTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref AlertTopic
+            Condition:
+              ArnEquals:
+                aws:SourceArn:
+                  - !GetAtt FailedTaskRule.Arn
+                  - !GetAtt TaskFailedToStartRule.Arn
+          - Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref AlertTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  AlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  FailedTaskRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: dudoong-batch-failed
+      Description: dudoong-batch 태스크의 app 컨테이너가 비정상 종료
+      EventPattern:
+        source: [aws.ecs]
+        detail-type: [ECS Task State Change]
+        detail:
+          clusterArn: [!GetAtt Cluster.Arn]
+          lastStatus: [STOPPED]
+          containers:
+            name: [app]
+            exitCode: [{ "anything-but": 0 }]
+      Targets:
+        - Id: sns
+          Arn: !Ref AlertTopic
+          InputTransformer:
+            InputPathsMap:
+              group: $.detail.group
+              reason: $.detail.stoppedReason
+              task: $.detail.taskArn
+            InputTemplate: '"[두둥 배치 실패] <group> / <reason> / <task>"'
+
+  # 컨테이너가 시작조차 못 한 경우(이미지 pull 실패, env 파일 없음 등) — exitCode 가 없어 위 룰에 안 걸린다
+  TaskFailedToStartRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: dudoong-batch-failed-to-start
+      Description: dudoong-batch 태스크가 시작하지 못함
+      EventPattern:
+        source: [aws.ecs]
+        detail-type: [ECS Task State Change]
+        detail:
+          clusterArn: [!GetAtt Cluster.Arn]
+          lastStatus: [STOPPED]
+          stopCode: [TaskFailedToStart]
+      Targets:
+        - Id: sns
+          Arn: !Ref AlertTopic
+          InputTransformer:
+            InputPathsMap:
+              group: $.detail.group
+              reason: $.detail.stoppedReason
+            InputTemplate: '"[두둥 배치 시작 실패] <group> / <reason>"'
+
+  SchedulerDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: dudoong-batch-scheduler-failed
+      AlarmDescription: 스케줄러가 배치 태스크를 시작하지 못함 (DLQ 에 메시지)
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt SchedulerDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+Outputs:
+  EnvBucketName:
+    Description: env 파일을 batch.env 로 올릴 버킷
+    Value: !Ref EnvBucket
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
+  ClusterName:
+    Value: !Ref Cluster
+  TaskDefinitionArn:
+    Value: !Ref TaskDefinition
+  TaskSecurityGroupId:
+    Value: !Ref TaskSecurityGroup
+  SubnetIds:
+    Value: !Join [",", !Ref SubnetIds]

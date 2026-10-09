@@ -1,0 +1,340 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  DuDoong-Deploy 배치 워크플로용 역할 (WorkBook EP09 4단계, Deploy #25).
+  - DuDoong-Infra Environment: 이미지 복사, 배치 수동 실행, infra/batch.yml 반영
+    (main 브랜치만 + 승인자 필수 보호 규칙을 반드시 건다)
+  - DuDoong-Infra-Preview Environment: PR 에서 변경 세트 미리보기만 (실행 권한 없음)
+  - CloudFormation 실행 역할은 배치 스택 리소스만 다루고, 만드는 IAM 역할에는 권한 경계를 강제해
+    템플릿을 고쳐도 계정 권한으로 올라갈 수 없게 한다
+
+# 배포 (1회, 관리자 계정 — CloudShell 권장. github-deploy-role 스택으로 OIDC 공급자가 이미 있다는 전제):
+#   aws cloudformation deploy --stack-name dudoong-github-batch-role \
+#     --template-file infra/github-batch-role.yml --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides RdsSecurityGroupId=<RDS 보안그룹 ID>
+# 출력 → GitHub secrets (런북 1단계 표)
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: Gosrock/DuDoong-Deploy
+  ApplyEnvironment:
+    Type: String
+    Default: DuDoong-Infra
+  PreviewEnvironment:
+    Type: String
+    Default: DuDoong-Infra-Preview
+  RdsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: 배치 보안그룹에서 3306 을 허용하는 규칙을 추가할 RDS 보안그룹 (이 그룹에만 인바운드 규칙 변경 허용)
+
+Resources:
+  # 배치 스택이 만드는 역할(dudoong-batch-*)이 넘을 수 없는 상한.
+  # 실행 역할·스케줄러 역할이 실제로 쓰는 것만 허용한다. 이 정책은 배치 스택이 아니라 여기서 관리한다
+  BatchRoleBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: dudoong-batch-boundary
+      Description: dudoong-batch-* 역할 권한 경계 (ECR pull, 로그, env 파일 읽기, 배치 태스크 실행)
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+            Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/dudoong-batch
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/dudoong/batch:*
+          - Effect: Allow
+            Action: s3:GetObject
+            Resource: arn:aws:s3:::dudoong-batch-*/batch.env
+          - Effect: Allow
+            Action: s3:GetBucketLocation
+            Resource: arn:aws:s3:::dudoong-batch-*
+          - Effect: Allow
+            Action: ecs:RunTask
+            Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/dudoong-batch:*
+          - Effect: Allow
+            Action: iam:PassRole
+            Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/dudoong-batch-execution
+          - Effect: Allow
+            Action: sqs:SendMessage
+            Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:dudoong-batch-*
+
+  # 반영·운영용: main 머지, 수동 실행, 이미지 복사
+  GitHubRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dudoong-github-batch
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:${ApplyEnvironment}
+      Policies:
+        - PolicyName: batch-ops
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # 이미지 복사 (Docker Hub → ECR)
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:BatchGetImage
+                  - ecr:DescribeImages
+                Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/dudoong-batch
+              # 배치 수동 실행
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/dudoong-batch:*
+              - Effect: Allow
+                Action: ecs:DescribeTasks
+                Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/dudoong-batch/*
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/dudoong-batch-execution
+              # infra/batch.yml 반영
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/dudoong-batch/*
+              - Effect: Allow
+                Action: cloudformation:GetTemplateSummary
+                Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CfnExecutionRole.Arn
+
+  # PR 미리보기 전용: 변경 세트를 만들고 보고 지울 수만 있다 (ExecuteChangeSet 없음)
+  GitHubPreviewRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dudoong-github-batch-preview
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:${PreviewEnvironment}
+      Policies:
+        - PolicyName: batch-preview
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeStacks
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/dudoong-batch/*
+              - Effect: Allow
+                Action: cloudformation:GetTemplateSummary
+                Resource: "*"
+              # 변경 세트에 실행 역할을 지정하려면 필요하다 (실행은 못 함)
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CfnExecutionRole.Arn
+
+  # CloudFormation 이 dudoong-batch 스택을 만들 때 쓰는 실행 역할.
+  # 이름을 dudoong-batch-* 밖에 둬서 자기 자신의 권한은 바꿀 수 없다
+  CfnExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dudoong-cfn-exec-batch
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: manage-batch-stack
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # ECS: 태스크 정의 등록은 리소스 단위 제한이 안 된다. RunTask 는 역할 PassRole 이 경계로 묶여 있다
+              - Effect: Allow
+                Action: ecs:*
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:CreateRepository
+                  - ecr:DeleteRepository
+                  - ecr:DescribeRepositories
+                  - ecr:PutLifecyclePolicy
+                  - ecr:GetLifecyclePolicy
+                  - ecr:DeleteLifecyclePolicy
+                  - ecr:PutImageScanningConfiguration
+                  - ecr:PutImageTagMutability
+                  - ecr:TagResource
+                  - ecr:UntagResource
+                  - ecr:ListTagsForResource
+                Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/dudoong-batch
+              - Effect: Allow
+                Action: ecr:DescribeRepositories
+                Resource: "*"
+              - Effect: Allow
+                Action: logs:*
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/dudoong/batch*
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: "*"
+              - Effect: Allow
+                Action: scheduler:*
+                Resource: !Sub arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/dudoong-batch-*
+              - Effect: Allow
+                Action: sns:*
+                Resource: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:dudoong-batch-*
+              - Effect: Allow
+                Action: sqs:*
+                Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:dudoong-batch-*
+              - Effect: Allow
+                Action: events:*
+                Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/dudoong-batch-*
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:TagResource
+                  - cloudwatch:UntagResource
+                  - cloudwatch:ListTagsForResource
+                Resource: !Sub arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:dudoong-batch-*
+              - Effect: Allow
+                Action: cloudwatch:DescribeAlarms
+                Resource: "*"
+              # S3: 배치 버킷의 버킷 단위 설정만. 객체(batch.env) 는 읽지 못한다
+              - Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:GetBucket*
+                  - s3:GetEncryptionConfiguration
+                  - s3:GetLifecycleConfiguration
+                  - s3:GetReplicationConfiguration
+                  - s3:GetAccelerateConfiguration
+                  - s3:GetInventoryConfiguration
+                  - s3:GetAnalyticsConfiguration
+                  - s3:GetMetricsConfiguration
+                  - s3:GetIntelligentTieringConfiguration
+                  - s3:ListBucket
+                  - s3:PutBucket*
+                  - s3:PutEncryptionConfiguration
+                  - s3:PutLifecycleConfiguration
+                Resource: arn:aws:s3:::dudoong-batch-*
+              # 보안그룹: 조회·생성은 계정 단위, 규칙 변경은 이 스택이 만든 그룹과 RDS 그룹만
+              - Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - ec2:CreateSecurityGroup
+                  - ec2:CreateTags
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ec2:DeleteSecurityGroup
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:DeleteTags
+                Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/*
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/aws:cloudformation:stack-name: dudoong-batch
+              - Effect: Allow
+                Action:
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupIngress
+                Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/${RdsSecurityGroupId}
+              # 계정에 ECS 를 처음 쓰므로 ECS 서비스 연결 역할(AWSServiceRoleForECS)을 만들 수 있어야 한다
+              - Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName: ecs.amazonaws.com
+              # IAM: dudoong-batch-* 역할만, 그리고 권한 경계가 붙은 상태로만 만들고 정책을 바꿀 수 있다
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:PutRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:DeleteRolePolicy
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/dudoong-batch-*
+                Condition:
+                  StringEquals:
+                    iam:PermissionsBoundary: !Ref BatchRoleBoundary
+              - Effect: Allow
+                Action:
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:UpdateRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListRoleTags
+                  - iam:PassRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/dudoong-batch-*
+              # 경계를 떼거나 바꾸거나, 신뢰 정책을 바꾸는 것은 막는다 (역할을 외부에 열어 주는 경로 차단)
+              - Effect: Deny
+                Action:
+                  - iam:DeleteRolePermissionsBoundary
+                  - iam:PutRolePermissionsBoundary
+                  - iam:UpdateAssumeRolePolicy
+                Resource: "*"
+              - Effect: Deny
+                Action:
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicyVersion
+                  - iam:SetDefaultPolicyVersion
+                  - iam:DeletePolicy
+                Resource: !Ref BatchRoleBoundary
+
+Outputs:
+  GitHubRoleArn:
+    Description: GitHub Environment(DuDoong-Infra) secret AWS_ROLE_ARN
+    Value: !GetAtt GitHubRole.Arn
+  GitHubPreviewRoleArn:
+    Description: GitHub Environment(DuDoong-Infra-Preview) secret AWS_ROLE_ARN
+    Value: !GetAtt GitHubPreviewRole.Arn
+  CfnExecutionRoleArn:
+    Description: 리포지토리 secret CFN_EXEC_ROLE_ARN
+    Value: !GetAtt CfnExecutionRole.Arn
+  BatchRoleBoundaryArn:
+    Description: batch.yml 역할들의 권한 경계 (batch.yml 이 이름으로 참조)
+    Value: !Ref BatchRoleBoundary
