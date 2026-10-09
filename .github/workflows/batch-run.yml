@@ -39,13 +39,13 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    environment: DuDoong-Infra
     timeout-minutes: 360
     steps:
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          # main 브랜치에서 실행할 때만 역할을 맡을 수 있다 (역할 신뢰 정책)
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/dudoong-github-batch
           aws-region: ap-northeast-2
           mask-aws-account-id: true
 

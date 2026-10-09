@@ -22,11 +22,11 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # PR 은 미리보기 전용 역할(실행 권한 없음), main·수동 실행은 반영 역할
-    environment: ${{ github.event_name == 'pull_request' && 'DuDoong-Infra-Preview' || 'DuDoong-Infra' }}
-    # 리소스 ID·역할 ARN·메일은 secrets 로 둔다 (퍼블릭 리포 Actions 로그에 vars 는 그대로 찍힌다)
+    # GitHub 에는 secret AWS_ACCOUNT_ID 하나만. 스택 값은 AWS SSM(/dudoong/infra/*)에서 템플릿이 직접 읽는다 (Deploy #28)
+    # PR 은 미리보기 전용 역할(실행 권한 없음), main 은 반영 역할 — 역할 신뢰 정책이 브랜치·PR 로 구분한다
     env:
-      HAS_ROLE: ${{ secrets.AWS_ROLE_ARN != '' }}
+      HAS_ROLE: ${{ secrets.AWS_ACCOUNT_ID != '' }}
+      ROLE_NAME: ${{ github.event_name == 'pull_request' && 'dudoong-github-batch-preview' || 'dudoong-github-batch' }}
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -34,31 +34,24 @@ jobs:
       # AWS 설정(스택 dudoong-github-batch-role + Environment 변수) 전에는 건너뛴다
       - name: check setup
         if: ${{ env.HAS_ROLE != 'true' }}
-        run: echo "::notice::Environment secret AWS_ROLE_ARN 이 없어 건너뜀 (infra/github-batch-role.yml 먼저 배포)"
+        run: echo "::notice::secret AWS_ACCOUNT_ID 가 없어 건너뜀 (infra/SETUP.md 참고)"
 
       - name: configure aws credentials
         if: ${{ env.HAS_ROLE == 'true' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ env.ROLE_NAME }}
           aws-region: ap-northeast-2
           mask-aws-account-id: true
 
       # 스택 파라미터는 Environment 변수에 둔다 (퍼블릭 리포라 리소스 ID 를 파일에 쓰지 않음)
       - name: deploy stack
         if: ${{ env.HAS_ROLE == 'true' }}
-        # bash 를 명시해야 pipefail 이 켜져 deploy 실패가 tee 에 가려지지 않는다
+        # 실패하면 로그 마지막 몇 줄만 계정 ID 를 가려 보여 준다
         shell: bash
         env:
           MODE: ${{ github.event_name == 'pull_request' && 'preview' || 'apply' }}
-          CFN_EXEC_ROLE_ARN: ${{ secrets.CFN_EXEC_ROLE_ARN }}
-          VPC_ID: ${{ secrets.BATCH_VPC_ID }}
-          SUBNET_IDS: ${{ secrets.BATCH_SUBNET_IDS }}
-          RDS_SG_ID: ${{ secrets.RDS_SECURITY_GROUP_ID }}
-          ALERT_EMAIL: ${{ secrets.BATCH_ALERT_EMAIL }}
-          SCHEDULES_STATE: ${{ vars.BATCH_SCHEDULES_STATE || 'DISABLED' }}
-          # 템플릿 기본값만 바꾸면 기존 스택은 이전 값을 유지하므로 항상 명시한다
-          IMAGE_TAG: ${{ vars.BATCH_IMAGE_TAG || '1.0.5-1' }}
+          ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
         run: |
           extra=""
           [ "$MODE" = "preview" ] && extra="--no-execute-changeset"
@@ -66,15 +59,9 @@ jobs:
             --stack-name dudoong-batch \
             --template-file infra/batch.yml \
             --capabilities CAPABILITY_NAMED_IAM \
-            --role-arn "$CFN_EXEC_ROLE_ARN" \
+            --role-arn "arn:aws:iam::$ACCOUNT_ID:role/dudoong-cfn-exec-batch" \
             --no-fail-on-empty-changeset $extra \
-            --parameter-overrides \
-              VpcId="$VPC_ID" \
-              SubnetIds="$SUBNET_IDS" \
-              RdsSecurityGroupId="$RDS_SG_ID" \
-              SchedulesState="$SCHEDULES_STATE" \
-              AlertEmail="$ALERT_EMAIL" \
-              BatchImageTag="$IMAGE_TAG" > deploy.log 2>&1 \
+            > deploy.log 2>&1 \
             || { tail -5 deploy.log | sed -E 's/[0-9]{12}/***/g'; exit 1; }
           echo "반영 완료 ($MODE)"
 

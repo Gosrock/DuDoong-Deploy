@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  운영·스테이징 서버가 배포 때 자기 .env 를 SSM Parameter Store 에서 직접 읽는 권한 (Deploy #28).
+  두 서버가 같은 인스턴스 역할을 쓰므로, 요청한 서버(ec2:SourceInstanceArn)로 값을 나눈다.
+  운영 서버 → /dudoong/env/prod 만, 스테이징 서버 → /dudoong/env/staging 만.
+
+# 배포 (관리자 계정 — CloudShell). 값은 SSM(/dudoong/infra/*)에서 읽는다:
+#   aws cloudformation deploy --stack-name dudoong-server-env-access \
+#     --template-file infra/server-env-access.yml --capabilities CAPABILITY_NAMED_IAM
+# SecureString 복호화는 SSM 을 거칠 때만 허용한다 (kms:ViaService).
+
+Parameters:
+  ProdInstanceId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/prod-instance-id
+  StagingInstanceId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/staging-instance-id
+  InstanceRoleName:
+    Type: String
+    Default: ec2-docker-log-write-iam
+    Description: 운영·스테이징 EC2 인스턴스 역할 이름
+
+Resources:
+  ServerEnvReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: dudoong-server-env-read
+      Description: 운영·스테이징 서버가 자기 .env 만 SSM 에서 읽기
+      Roles:
+        - !Ref InstanceRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ProdServerReadsProdEnv
+            Effect: Allow
+            Action: ssm:GetParameter
+            Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/dudoong/env/prod
+            Condition:
+              ArnEquals:
+                ec2:SourceInstanceArn: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ProdInstanceId}
+          - Sid: StagingServerReadsStagingEnv
+            Effect: Allow
+            Action: ssm:GetParameter
+            Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/dudoong/env/staging
+            Condition:
+              ArnEquals:
+                ec2:SourceInstanceArn: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${StagingInstanceId}
+          # SecureString(aws/ssm 키) 복호화 — SSM 을 통한 호출에만
+          - Sid: DecryptViaSsmOnly
+            Effect: Allow
+            Action: kms:Decrypt
+            Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*
+            Condition:
+              StringEquals:
+                kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+
+Outputs:
+  PolicyArn:
+    Value: !Ref ServerEnvReadPolicy
