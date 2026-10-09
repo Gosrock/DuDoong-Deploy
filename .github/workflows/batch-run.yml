@@ -45,8 +45,9 @@ jobs:
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ap-northeast-2
+          mask-aws-account-id: true
 
       # 실행할 배치 인자 목록 (한 줄 = 태스크 한 번). $RUN_ID·$TODAY 는 컨테이너 안에서 채워진다
       - name: build batch args
@@ -56,15 +57,16 @@ jobs:
           DATE: ${{ inputs.date }}
         run: |
           settlement="이벤트거래정산 이벤트정산요약 이벤트정산서 이벤트주문목록_엑셀업로드 이벤트정산_이메일발송_어드민 이벤트정산_이메일발송_호스트 이벤트정산_알림톡발송_호스트"
+          # grep 은 줄 단위라 여러 줄 입력의 한 줄만 맞아도 통과한다 → case 로 값 전체를 검사한다
           need_event_id() {
-            echo "$EVENT_ID" | grep -Eq '^[0-9]+$' || { echo "정산 job은 공연 ID(event_id, 숫자)가 필요하다"; exit 1; }
+            case "$EVENT_ID" in ''|*[!0-9]*) echo "정산 job은 공연 ID(event_id, 숫자만)가 필요하다"; exit 1 ;; esac
           }
           : > runs.txt
           case "$JOB" in
             이벤트_자동만료) echo '--job.name=이벤트_자동만료 version=$RUN_ID' >> runs.txt ;;
             슬랙유저통계)
               if [ -n "$DATE" ]; then
-                echo "$DATE" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { echo "날짜 형식은 yyyy-MM-dd"; exit 1; }
+                case "$DATE" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) echo "날짜 형식은 yyyy-MM-dd"; exit 1 ;; esac
                 echo "--job.name=슬랙유저통계 date=$DATE" >> runs.txt
               else
                 echo '--job.name=슬랙유저통계 date=$TODAY' >> runs.txt
@@ -109,7 +111,7 @@ jobs:
             fi
             code=$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task" --query "tasks[0].containers[?name=='app'].exitCode | [0]" --output text)
             reason=$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task" --query 'tasks[0].stoppedReason' --output text)
-            echo "  exit code: $code / stopped: $reason"
+            echo "  exit code: $code / stopped: ${reason//[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]/***}"
             echo "| \`$args\` | \`$code\` | \`batch/app/$id\` |" >> "$GITHUB_STEP_SUMMARY"
             if [ "$code" != "0" ]; then
               echo "::error::실패해서 멈춤 (로그: CloudWatch Logs /dudoong/batch). 정산_전체를 다시 돌리면 앞서 성공한 job(메일·알림톡 포함)도 다시 실행되니, 실패한 job부터 개별로 실행"

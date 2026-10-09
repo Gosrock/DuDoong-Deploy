@@ -32,30 +32,38 @@
    ```bash
    aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com
    ```
-3. 배치용 역할 스택
+3. 배치용 역할 스택 (관리자 계정, CloudShell 권장)
    ```bash
    aws cloudformation deploy --stack-name dudoong-github-batch-role \
-     --template-file infra/github-batch-role.yml --capabilities CAPABILITY_NAMED_IAM
+     --template-file infra/github-batch-role.yml --capabilities CAPABILITY_NAMED_IAM \
+     --parameter-overrides RdsSecurityGroupId=<RDS 보안그룹 ID>
    aws cloudformation describe-stacks --stack-name dudoong-github-batch-role --query 'Stacks[0].Outputs'
    ```
-4. GitHub 변수 등록 (Settings → Secrets and variables → Actions → **Variables**)
-   - **리포지토리 변수** (두 Environment가 같이 쓴다)
-     | 변수 | 값 |
+   - CloudFormation 실행 역할(`dudoong-cfn-exec-batch`)은 배치 리소스만 다루고, 만드는 IAM 역할에는 **권한 경계(`dudoong-batch-boundary`)를 강제**한다. 템플릿을 고쳐도 관리자 권한 역할을 만들거나 신뢰 정책을 외부로 바꿀 수 없다
+4. GitHub 설정 (Settings → Secrets and variables → Actions)
+   - **리소스 ID·역할 ARN·메일은 Secrets 로** 넣는다 — 퍼블릭 리포라 Variables 는 Actions 로그에 그대로 찍힌다
+   - **리포지토리 Secrets** (두 Environment 가 같이 쓴다)
+     | 이름 | 값 |
      |---|---|
      | `CFN_EXEC_ROLE_ARN` | 출력 `CfnExecutionRoleArn` |
      | `BATCH_VPC_ID` | default VPC ID |
      | `BATCH_SUBNET_IDS` | 퍼블릭 서브넷 2개 이상, 쉼표로 (예: 2a,2c) |
      | `RDS_SECURITY_GROUP_ID` | RDS 보안그룹 (`dudoong-rds`) ID |
-     | `BATCH_SCHEDULES_STATE` | 처음엔 `DISABLED` |
      | `BATCH_ALERT_EMAIL` | 실패 알림 받을 메일 — **스케줄을 켜기 전에 반드시** |
+   - **리포지토리 Variables** (민감하지 않은 값)
+     | 이름 | 값 |
+     |---|---|
+     | `BATCH_SCHEDULES_STATE` | 처음엔 `DISABLED` |
      | `BATCH_IMAGE_TAG` | `1.0.5-1` (이미지를 바꿀 때 이 값만 바꾼다) |
-   - **Environment `DuDoong-Infra`** (반영·수동 실행): 변수 `AWS_ROLE_ARN` = 출력 `GitHubRoleArn`
-     - 보호 규칙 **Deployment branches = `main` 만** — PR 브랜치에서 반영 역할을 못 쓰게
-   - **Environment `DuDoong-Infra-Preview`** (PR 미리보기): 변수 `AWS_ROLE_ARN` = 출력 `GitHubPreviewRoleArn` (변경 세트 실행 권한 없음)
+   - **Environment `DuDoong-Infra`** (반영·수동 실행): Secret `AWS_ROLE_ARN` = 출력 `GitHubRoleArn`
+     - 보호 규칙 (필수): **Deployment branches = `main` 만**, **Required reviewers 1명 이상 + Prevent self-review**
+   - **Environment `DuDoong-Infra-Preview`** (PR 미리보기): Secret `AWS_ROLE_ARN` = 출력 `GitHubPreviewRoleArn` (변경 세트 실행 권한 없음)
+   - Settings → Actions → General: **외부 기여자 워크플로 실행에 승인 필요**
+   - **콘솔에서 변경 세트를 직접 실행(Execute)하지 않는다.** PR 미리보기가 만든 변경 세트는 워크플로가 지우지만, 남아 있어도 실행하지 말고 main 머지로만 반영한다
 5. Actions **"Infra Deploy (batch)"** 수동 실행 (main) → `dudoong-batch` 스택 생성
    - 실패하면 Actions가 빨간색으로 끝난다. 스택이 `ROLLBACK_COMPLETE` 면 콘솔에서 스택 삭제 → ECR `dudoong-batch` 저장소가 남아 있으면 같이 지우고 다시 실행
    - SNS 구독 확인 메일의 링크를 누른다
-6. env 파일 올리기 (센터 파일에서 Redis 줄만 뺀다)
+6. env 파일 올리기 (센터 파일에서 Redis 줄을 빼고, 가능하면 배치가 쓰지 않는 키도 뺀다)
    ```bash
    # 센터에서: sudo grep -vE '^REDIS_(HOST|PORT|PASSWORD)=' /root/dudoong/.env.prod > /tmp/batch.env && sudo chown ubuntu /tmp/batch.env
    scp -i <센터 키> ubuntu@<센터>:/tmp/batch.env ./batch.env
@@ -63,6 +71,7 @@
    aws s3 cp ./batch.env s3://<출력 EnvBucketName>/batch.env --sse AES256
    rm ./batch.env                                # 센터 /tmp/batch.env 도 지운다
    ```
+   - 버킷은 비공개·암호화·TLS 강제, 옛 버전은 30일 뒤 자동 삭제 (키를 바꾼 뒤 옛 값이 오래 남지 않게)
    - Redis 는 같은 태스크의 사이드카(`localhost:6379`, 비밀번호 없음). 1.0.5-1 의 Redisson 은 비밀번호 없이 붙으므로 지금 센터 redis 와 같은 조건이다. env 파일에 `REDIS_PASSWORD` 가 남아 있으면 Lettuce 가 사이드카에 AUTH 를 보내 실패할 수 있어 위에서 뺀다
 7. Actions **"Batch Image Copy"** 실행 (tag `1.0.5-1`)
 
@@ -103,6 +112,8 @@ Actions **"Batch Run (manual)"**
   - 태스크가 시작조차 못 함 (이미지 pull 실패, env 파일 없음 등)
   - 스케줄러가 태스크를 못 띄움 (권한·서브넷·용량 → DLQ 알람)
 - 수동 실행이 55분 넘게 안 끝나면 Actions 는 실패로 끝나지만 **태스크는 계속 돌 수 있다.** 다시 실행하지 말고 배치 이력 화면에서 확인. `정산_전체` 를 다시 돌리면 이미 성공한 메일·알림톡 job 도 다시 나간다 → 실패한 job부터 개별 실행
+- 진입 스크립트는 `BATCH_ARGS` 를 셸로 해석(eval)하지 않고 `$TODAY`/`$RUN_ID` 자리표시자만 바꾼다. 수동 실행 입력(공연 ID·날짜)도 값 전체를 검사한다 → 입력에 명령을 섞어도 실행되지 않는다
+- 이미지 복사 때 Docker Hub 이미지 digest 를 Actions 로그에 남기고, ECR 은 푸시 때 취약점을 스캔한다
 - 한글 job 이름: 이미지의 JVM 이 `LANG` 없이도 UTF-8 로 인자를 읽는 것을 확인함 (`sun.jnu.encoding=UTF-8`)
 - ECR 은 태그 없는 이미지만 7일 뒤 정리한다 (쓰는 태그는 지우지 않음, 태그 변경 불가)
 - 태스크는 퍼블릭 서브넷 + 퍼블릭 IP(실행 중에만 과금)로 나간다. 들어오는 포트는 없다

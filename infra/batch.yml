@@ -53,6 +53,31 @@ Resources:
         RestrictPublicBuckets: true
       VersioningConfiguration:
         Status: Enabled
+      # 시크릿을 바꾼 뒤 옛 버전이 무기한 남지 않게
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-env-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+
+  EnvBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref EnvBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt EnvBucket.Arn
+              - !Sub ${EnvBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
 
   Repository:
     Type: AWS::ECR::Repository
@@ -61,6 +86,8 @@ Resources:
     Properties:
       RepositoryName: dudoong-batch
       ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
       LifecyclePolicy:
         LifecyclePolicyText: |
           {"rules":[{"rulePriority":1,"description":"태그 없는 이미지만 정리 (쓰는 태그는 지우지 않는다)","selection":{"tagStatus":"untagged","countType":"sinceImagePushed","countUnit":"days","countNumber":7},"action":{"type":"expire"}}]}
@@ -82,6 +109,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: dudoong-batch-execution
+      PermissionsBoundary: !Sub arn:aws:iam::${AWS::AccountId}:policy/dudoong-batch-boundary
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -108,9 +136,7 @@ Resources:
     Properties:
       GroupDescription: dudoong batch fargate tasks (outbound only)
       VpcId: !Ref VpcId
-      SecurityGroupEgress:
-        - IpProtocol: "-1"
-          CidrIp: 0.0.0.0/0
+      # 인바운드 없음. 아웃바운드는 보안그룹 기본값(전체 허용)
 
   RdsIngressFromBatch:
     Type: AWS::EC2::SecurityGroupIngress
@@ -139,11 +165,12 @@ Resources:
           Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/dudoong-batch:${BatchImageTag}
           Essential: true
           # 이미지 원래 ENTRYPOINT 와 같은 java 옵션. 실행마다 BATCH_ARGS 만 바꾼다.
-          # BATCH_ARGS 안의 $TODAY(KST yyyy-MM-dd), $RUN_ID(epoch 초)는 여기서 채운다.
+          # BATCH_ARGS 안의 자리표시자 $TODAY(KST yyyy-MM-dd), $RUN_ID(epoch 초)만 글자 그대로 바꾸고,
+          # 셸로 해석(eval)하지 않는다 → 인자에 명령이 섞여도 실행되지 않는다.
           # 이미지에 시간대 파일이 없어 POSIX 표기 KST-9 를 쓴다
           EntryPoint: ["sh", "-c"]
           Command:
-            - 'TODAY=$(TZ=KST-9 date +%F); RUN_ID=$(date +%s); eval "set -- $BATCH_ARGS"; exec java -Dspring.profiles.active="$PROFILE" -Djava.security.egd=file:/dev/./urandom -Duser.timezone=Asia/Seoul -jar /app.jar "$@"'
+            - 'set -f; TODAY=$(TZ=KST-9 date +%F); RUN_ID=$(date +%s); set -- $(printf "%s" "$BATCH_ARGS" | sed -e "s/\$TODAY/$TODAY/g" -e "s/\$RUN_ID/$RUN_ID/g"); exec java -Dspring.profiles.active="$PROFILE" -Djava.security.egd=file:/dev/./urandom -Duser.timezone=Asia/Seoul -jar /app.jar "$@"'
           EnvironmentFiles:
             - Type: s3
               Value: !Sub ${EnvBucket.Arn}/batch.env
@@ -186,6 +213,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: dudoong-batch-scheduler
+      PermissionsBoundary: !Sub arn:aws:iam::${AWS::AccountId}:policy/dudoong-batch-boundary
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -287,6 +315,11 @@ Resources:
               Service: events.amazonaws.com
             Action: sns:Publish
             Resource: !Ref AlertTopic
+            Condition:
+              ArnEquals:
+                aws:SourceArn:
+                  - !GetAtt FailedTaskRule.Arn
+                  - !GetAtt TaskFailedToStartRule.Arn
           - Effect: Allow
             Principal:
               Service: cloudwatch.amazonaws.com

@@ -24,35 +24,39 @@ jobs:
     runs-on: ubuntu-latest
     # PR 은 미리보기 전용 역할(실행 권한 없음), main·수동 실행은 반영 역할
     environment: ${{ github.event_name == 'pull_request' && 'DuDoong-Infra-Preview' || 'DuDoong-Infra' }}
+    # 리소스 ID·역할 ARN·메일은 secrets 로 둔다 (퍼블릭 리포 Actions 로그에 vars 는 그대로 찍힌다)
+    env:
+      HAS_ROLE: ${{ secrets.AWS_ROLE_ARN != '' }}
     steps:
       - name: checkout
         uses: actions/checkout@v4
 
       # AWS 설정(스택 dudoong-github-batch-role + Environment 변수) 전에는 건너뛴다
       - name: check setup
-        if: ${{ vars.AWS_ROLE_ARN == '' }}
-        run: echo "::notice::DuDoong-Infra Environment 변수 AWS_ROLE_ARN 이 없어 건너뜀 (infra/github-batch-role.yml 먼저 배포)"
+        if: ${{ env.HAS_ROLE != 'true' }}
+        run: echo "::notice::Environment secret AWS_ROLE_ARN 이 없어 건너뜀 (infra/github-batch-role.yml 먼저 배포)"
 
       - name: configure aws credentials
-        if: ${{ vars.AWS_ROLE_ARN != '' }}
+        if: ${{ env.HAS_ROLE == 'true' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ap-northeast-2
+          mask-aws-account-id: true
 
       # 스택 파라미터는 Environment 변수에 둔다 (퍼블릭 리포라 리소스 ID 를 파일에 쓰지 않음)
       - name: deploy stack
-        if: ${{ vars.AWS_ROLE_ARN != '' }}
+        if: ${{ env.HAS_ROLE == 'true' }}
         # bash 를 명시해야 pipefail 이 켜져 deploy 실패가 tee 에 가려지지 않는다
         shell: bash
         env:
           MODE: ${{ github.event_name == 'pull_request' && 'preview' || 'apply' }}
-          CFN_EXEC_ROLE_ARN: ${{ vars.CFN_EXEC_ROLE_ARN }}
-          VPC_ID: ${{ vars.BATCH_VPC_ID }}
-          SUBNET_IDS: ${{ vars.BATCH_SUBNET_IDS }}
-          RDS_SG_ID: ${{ vars.RDS_SECURITY_GROUP_ID }}
+          CFN_EXEC_ROLE_ARN: ${{ secrets.CFN_EXEC_ROLE_ARN }}
+          VPC_ID: ${{ secrets.BATCH_VPC_ID }}
+          SUBNET_IDS: ${{ secrets.BATCH_SUBNET_IDS }}
+          RDS_SG_ID: ${{ secrets.RDS_SECURITY_GROUP_ID }}
+          ALERT_EMAIL: ${{ secrets.BATCH_ALERT_EMAIL }}
           SCHEDULES_STATE: ${{ vars.BATCH_SCHEDULES_STATE || 'DISABLED' }}
-          ALERT_EMAIL: ${{ vars.BATCH_ALERT_EMAIL }}
           # 템플릿 기본값만 바꾸면 기존 스택은 이전 값을 유지하므로 항상 명시한다
           IMAGE_TAG: ${{ vars.BATCH_IMAGE_TAG || '1.0.5-1' }}
         run: |
@@ -70,10 +74,12 @@ jobs:
               RdsSecurityGroupId="$RDS_SG_ID" \
               SchedulesState="$SCHEDULES_STATE" \
               AlertEmail="$ALERT_EMAIL" \
-              BatchImageTag="$IMAGE_TAG" | tee deploy.log
+              BatchImageTag="$IMAGE_TAG" > deploy.log 2>&1 \
+            || { tail -5 deploy.log | sed -E 's/[0-9]{12}/***/g'; exit 1; }
+          echo "반영 완료 ($MODE)"
 
       - name: change set summary
-        if: ${{ github.event_name == 'pull_request' && vars.AWS_ROLE_ARN != '' }}
+        if: ${{ github.event_name == 'pull_request' && env.HAS_ROLE == 'true' }}
         shell: bash
         run: |
           cs=$(grep -oE 'arn:aws:cloudformation:[^ ]+changeSet/[^ ]+' deploy.log | head -1 || true)

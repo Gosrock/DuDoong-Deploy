@@ -20,8 +20,9 @@ jobs:
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ap-northeast-2
+          mask-aws-account-id: true
 
       - name: login to ecr
         id: ecr
@@ -37,5 +38,8 @@ jobs:
             exit 0
           fi
           docker pull --platform linux/amd64 "water0641/dudoong-batch:$TAG"
+          # 공급망 확인용: 복사한 이미지 digest 를 남긴다 (ECR 은 푸시 때 취약점 스캔)
+          echo "digest: $(docker inspect --format '{{index .RepoDigests 0}}' "water0641/dudoong-batch:$TAG")"
           docker tag "water0641/dudoong-batch:$TAG" "$REGISTRY/dudoong-batch:$TAG"
-          docker push "$REGISTRY/dudoong-batch:$TAG"
+          docker push -q "$REGISTRY/dudoong-batch:$TAG" > /dev/null
+          echo "ECR 복사 완료: dudoong-batch:$TAG"
