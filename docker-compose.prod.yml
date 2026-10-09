@@ -60,7 +60,7 @@ services:
       - admin
       - internal-admin
     restart: always
-    image: water0641/dudoong-nginx:1.9.0
+    image: water0641/dudoong-nginx:1.9.1
     # HTTPS 인증서 (scripts/tls-cert.sh 가 배포 때·매일 갱신, Deploy #37·#39)
     volumes:
       - /home/ubuntu/tls/certs:/etc/nginx/certs:ro
