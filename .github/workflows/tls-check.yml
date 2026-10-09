@@ -1,0 +1,52 @@
+name: TLS Check
+# HTTPS 인증서 만료 감시 (Deploy #37, WorkBook EP09 5단계).
+# 서버가 Let's Encrypt 인증서를 스스로 갱신한다(scripts/tls-cert.sh). 갱신이 조용히 멈췄을 때를 대비해
+# 매일 각 도메인의 인증서 남은 기간을 보고, 20일 아래면 실패한다 → GitHub 가 워크플로 실패 메일을 보낸다.
+# 스테이징은 평소 꺼져 있으므로 접속이 안 되면 건너뛴다 (켜질 때 서버가 먼저 갱신한다).
+on:
+  schedule:
+    - cron: "0 0 * * *" # 매일 09:00 KST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: check certificate expiry
+        shell: bash
+        run: |
+          MIN_DAYS=20
+          fail=0
+          {
+            echo "| 도메인 | 남은 일수 | 발급자 |"
+            echo "|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for entry in dudoong.com:required internal-admin.dudoong.com:required \
+                       staging.dudoong.com:optional staging-internal-admin.dudoong.com:optional; do
+            host=${entry%%:*}; kind=${entry##*:}
+            cert=$(echo | timeout 15 openssl s_client -connect "$host:443" -servername "$host" 2>/dev/null \
+                   | openssl x509 -noout -enddate -issuer 2>/dev/null || true)
+            if [ -z "$cert" ]; then
+              if [ "$kind" = optional ]; then
+                echo "$host: 접속 안 됨 (꺼져 있음) — 건너뜀"
+                echo "| $host | 꺼져 있음 | - |" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "::error::$host: 인증서를 가져오지 못함"; fail=1
+                echo "| $host | 접속 실패 | - |" >> "$GITHUB_STEP_SUMMARY"
+              fi
+              continue
+            fi
+            end=$(echo "$cert" | sed -n 's/^notAfter=//p')
+            issuer=$(echo "$cert" | sed -n 's/^issuer=.*O *= *\([^,]*\).*/\1/p')
+            days=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
+            echo "$host: ${days}일 남음 ($issuer)"
+            echo "| $host | $days | $issuer |" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$days" -lt "$MIN_DAYS" ]; then
+              echo "::error::$host 인증서가 ${days}일 남았다 — 서버에서 sh ~/srv/ubuntu/scripts/tls-cert.sh 실행 결과와 ~/tls/certbot.log 확인"
+              fail=1
+            fi
+          done
+          exit $fail
