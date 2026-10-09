@@ -173,6 +173,7 @@ jobs:
           script: |
             sh ~/srv/ubuntu/docker-install.sh
             sh ~/srv/ubuntu/scripts/fetch-env.sh prod || exit 1
+            sh ~/srv/ubuntu/scripts/tls-cert.sh prod || exit 1
             echo "start docker-compose up: ubuntu"
             sudo docker-compose -v
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml pull
