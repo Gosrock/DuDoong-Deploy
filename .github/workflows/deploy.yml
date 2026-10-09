@@ -18,23 +18,27 @@ jobs:
     concurrency:
       group: deploy-staging-server
       cancel-in-progress: false
+    # 역할 ARN·인스턴스 ID 는 secrets 로 (퍼블릭 리포 Actions 로그에 vars 는 그대로 찍힌다)
+    env:
+      HAS_ROLE: ${{ secrets.AWS_ROLE_ARN != '' }}
     steps:
       - name: checkout
         uses: actions/checkout@v4
 
       # 스테이징은 평소 꺼둔다 (WorkBook EP09). 꺼져 있으면 켜고, 바뀐 퍼블릭 IP를 조회한다.
-      # Environment 변수 AWS_ROLE_ARN / STAGING_INSTANCE_ID 가 없으면 기존처럼 secrets.HOST 사용.
+      # Environment secrets AWS_ROLE_ARN / STAGING_INSTANCE_ID 가 없으면 기존처럼 secrets.HOST 사용.
       - name: configure aws credentials
-        if: ${{ vars.AWS_ROLE_ARN != '' }}
+        if: ${{ env.HAS_ROLE == 'true' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ap-northeast-2
+          mask-aws-account-id: true
 
       - name: ensure staging is running
-        if: ${{ vars.AWS_ROLE_ARN != '' }}
+        if: ${{ env.HAS_ROLE == 'true' }}
         env:
-          INSTANCE_ID: ${{ vars.STAGING_INSTANCE_ID }}
+          INSTANCE_ID: ${{ secrets.STAGING_INSTANCE_ID }}
         run: |
           state() { aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text; }
           s=$(state); echo "staging state: $s"
@@ -53,7 +57,7 @@ jobs:
           echo "STAGING_HOST=$ip" >> "$GITHUB_ENV"
 
       - name: fallback to fixed host
-        if: ${{ vars.AWS_ROLE_ARN == '' }}
+        if: ${{ env.HAS_ROLE != 'true' }}
         run: echo "STAGING_HOST=${{ secrets.HOST }}" >> "$GITHUB_ENV"
 
       - name: create env file
