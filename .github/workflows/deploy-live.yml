@@ -7,16 +7,20 @@ jobs:
     name: Deploy(Production)
     runs-on: ubuntu-latest
     environment: DuDoong-Production
+    # deploy.yml 의 운영 job 과 같은 그룹 → 운영 서버 배포가 겹치지 않는다. 스테이징 대기는 기다리지 않는다
+    concurrency:
+      group: deploy-production-server
+      cancel-in-progress: false
     steps:
       - name: checkout
-        uses: actions/checkout@master
+        uses: actions/checkout@v4
 
       - name: create env file
         run: |
           touch .env
           echo "${{ secrets.ENV_VARS }}" >> .env
       - name: create remote directory
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
           username: ubuntu
@@ -32,7 +36,7 @@ jobs:
           remote_user: ubuntu
           remote_key: ${{ secrets.KEY }}
       - name: executing remote ssh commands using password
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOST }}
           username: ubuntu
@@ -42,7 +46,6 @@ jobs:
             sh ~/srv/ubuntu/docker-install.sh
             echo "start docker-compose up: ubuntu"
             sudo docker-compose -v
-            cat ~/srv/ubuntu/.env
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml pull
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml --env-file ~/srv/ubuntu/.env up --build -d
             echo "prune images"

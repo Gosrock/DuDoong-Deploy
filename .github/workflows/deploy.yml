@@ -10,14 +10,60 @@ on:
       - .github/workflows/batch-*.yml
       - .github/workflows/infra-*.yml
 
+permissions:
+  contents: read
+  id-token: write # GitHub OIDC → AWS 역할 (스테이징 조회·켜기)
+
 jobs:
   deploy-staging:
     name: Deploy(Staging)
     runs-on: ubuntu-latest
     environment: DuDoong-Staging
+    # 연속 머지로 배포가 겹치면 같은 서버에서 rsync·compose 가 섞인다 → 서버별로 하나씩
+    concurrency:
+      group: deploy-staging-server
+      cancel-in-progress: false
+    # 역할 ARN·인스턴스 ID 는 secrets 로 (퍼블릭 리포 Actions 로그에 vars 는 그대로 찍힌다)
+    env:
+      HAS_ROLE: ${{ secrets.AWS_ROLE_ARN != '' }}
     steps:
       - name: checkout
         uses: actions/checkout@v4
+
+      # 스테이징은 평소 꺼둔다 (WorkBook EP09). 꺼져 있으면 켜고, 바뀐 퍼블릭 IP를 조회한다.
+      # Environment secrets AWS_ROLE_ARN / STAGING_INSTANCE_ID 가 없으면 기존처럼 secrets.HOST 사용.
+      - name: configure aws credentials
+        if: ${{ env.HAS_ROLE == 'true' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-northeast-2
+          mask-aws-account-id: true
+
+      - name: ensure staging is running
+        if: ${{ env.HAS_ROLE == 'true' }}
+        env:
+          INSTANCE_ID: ${{ secrets.STAGING_INSTANCE_ID }}
+        run: |
+          state() { aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text; }
+          s=$(state); echo "staging state: $s"
+          case "$s" in
+            stopping) aws ec2 wait instance-stopped --instance-ids "$INSTANCE_ID"; s=stopped ;;
+          esac
+          if [ "$s" = "stopped" ]; then
+            echo "starting staging..."
+            aws ec2 start-instances --instance-ids "$INSTANCE_ID" > /dev/null
+          fi
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+          aws ec2 wait instance-status-ok --instance-ids "$INSTANCE_ID"
+          ip=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+          if [ -z "$ip" ] || [ "$ip" = "None" ]; then echo "no public ip"; exit 1; fi
+          echo "::add-mask::$ip"
+          echo "STAGING_HOST=$ip" >> "$GITHUB_ENV"
+
+      - name: fallback to fixed host
+        if: ${{ env.HAS_ROLE != 'true' }}
+        run: echo "STAGING_HOST=${{ secrets.HOST }}" >> "$GITHUB_ENV"
 
       - name: create env file
         run: |
@@ -26,7 +72,7 @@ jobs:
       - name: create remote directory
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.HOST }}
+          host: ${{ env.STAGING_HOST }}
           username: ubuntu
           key: ${{ secrets.KEY }}
           script: mkdir -p ~/srv/ubuntu
@@ -36,13 +82,13 @@ jobs:
         with:
           switches: -avzr --delete
           remote_path: ~/srv/ubuntu/
-          remote_host: ${{ secrets.HOST }}
+          remote_host: ${{ env.STAGING_HOST }}
           remote_user: ubuntu
           remote_key: ${{ secrets.KEY }}
       - name: executing remote ssh commands using password
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.HOST }}
+          host: ${{ env.STAGING_HOST }}
           username: ubuntu
           key: ${{ secrets.KEY }}
           envs:
@@ -50,17 +96,40 @@ jobs:
             sh ~/srv/ubuntu/docker-install.sh
             echo "start docker-compose up: ubuntu"
             sudo docker-compose -v
-            cat ~/srv/ubuntu/.env
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.staging.yml pull
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.staging.yml --env-file ~/srv/ubuntu/.env up --build -d
             echo "prune images"
             sudo docker system prune --all -f
+
+      # 스테이징 앱이 실제로 떴는지 확인한다. 실패하면 운영 배포(needs)로 넘어가지 않는다.
+      - name: health check
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ env.STAGING_HOST }}
+          username: ubuntu
+          key: ${{ secrets.KEY }}
+          command_timeout: 15m
+          # t3.micro 에서 컨테이너 6개가 뜨는 데 몇 분 걸린다 → 최대 10분 기다린다
+          script: |
+            for i in $(seq 1 60); do
+              code=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' http://localhost/api/v1/examples/health || true)
+              echo "try $i: $code"
+              [ "$code" = "200" ] && exit 0
+              sleep 10
+            done
+            echo "staging health check failed"
+            sudo docker ps --format '{{.Names}}\t{{.Status}}'
+            exit 1
 
   deploy-production:
     name: Deploy(Production)
     needs: deploy-staging
     runs-on: ubuntu-latest
     environment: DuDoong-Production
+    # deploy-live 와 같은 그룹: 운영 서버 배포는 한 번에 하나 (스테이징 대기와는 무관)
+    concurrency:
+      group: deploy-production-server
+      cancel-in-progress: false
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -96,7 +165,6 @@ jobs:
             sh ~/srv/ubuntu/docker-install.sh
             echo "start docker-compose up: ubuntu"
             sudo docker-compose -v
-            cat ~/srv/ubuntu/.env
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml pull
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml --env-file ~/srv/ubuntu/.env up --build -d
             echo "prune images"
