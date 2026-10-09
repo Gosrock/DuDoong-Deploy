@@ -31,9 +31,12 @@ Conditions:
   CreateProvider: !Equals [!Ref CreateOidcProvider, "true"]
 
 Resources:
+  # 배치 역할(github-batch-role)도 이 공급자를 쓴다 → 이 스택을 지워도 공급자는 남긴다
   GitHubOidcProvider:
     Type: AWS::IAM::OIDCProvider
     Condition: CreateProvider
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Url: https://token.actions.githubusercontent.com
       ClientIdList:
