@@ -1,0 +1,65 @@
+name: Staging Power
+# 스테이징 서버 켜기·끄기·상태 확인 (WorkBook EP09). 평소에는 꺼 두고 필요할 때만 켠다.
+# - 켜기: 서버만 켠다. 컨테이너는 restart: unless-stopped 로 이전 상태 그대로 다시 뜬다 (새 코드 반영은 Deployment 워크플로)
+# - 끄기: 매일 02:00(KST) 자동 종료와 같은 동작을 지금 바로 한다
+# 역할은 배포와 같은 dudoong-github-staging-deploy (스테이징 인스턴스 한 대만 켜고 끌 수 있다)
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 동작
+        required: true
+        type: choice
+        options:
+          - status
+          - start
+          - stop
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-staging-server
+  cancel-in-progress: false
+
+jobs:
+  power:
+    runs-on: ubuntu-latest
+    environment: DuDoong-Staging
+    steps:
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/dudoong-github-staging-deploy
+          aws-region: ap-northeast-2
+          mask-aws-account-id: true
+
+      - name: ${{ inputs.action }}
+        env:
+          ACTION: ${{ inputs.action }}
+        run: |
+          INSTANCE_ID=$(aws ssm get-parameter --name /dudoong/infra/staging-instance-id --query Parameter.Value --output text)
+          echo "::add-mask::$INSTANCE_ID"
+          state() { aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text; }
+          s=$(state); echo "현재 상태: $s"
+          case "$ACTION" in
+            start)
+              [ "$s" = stopping ] && aws ec2 wait instance-stopped --instance-ids "$INSTANCE_ID"
+              aws ec2 start-instances --instance-ids "$INSTANCE_ID" > /dev/null
+              aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+              echo "서버 켜짐 → 앱 응답 대기 (https://staging.dudoong.com)"
+              for i in $(seq 1 36); do
+                code=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://staging.dudoong.com/api/v1/examples/health || true)
+                [ "$code" = 200 ] && { echo "앱 정상 (try $i)"; break; }
+                sleep 10
+              done
+              [ "$code" = 200 ] || { echo "::error::서버는 켜졌지만 앱이 6분 안에 응답하지 않음"; exit 1; }
+              ;;
+            stop)
+              aws ec2 stop-instances --instance-ids "$INSTANCE_ID" > /dev/null
+              aws ec2 wait instance-stopped --instance-ids "$INSTANCE_ID"
+              ;;
+          esac
+          s=$(state); echo "최종 상태: $s"
+          echo "### 스테이징: \`$s\`" >> "$GITHUB_STEP_SUMMARY"
