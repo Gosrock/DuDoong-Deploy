@@ -2,49 +2,24 @@
 
 > 퍼블릭 리포라 실제 IP·비밀번호·키는 여기 적지 않는다
 
-이번 변경: nginx 전달 헤더 재작성·보안 헤더·로그 쿼리스트링 제거, Redis 비밀번호·localhost bind·이미지 고정.
+이번 변경: nginx 전달 헤더 재작성·보안 헤더·로그 쿼리스트링 제거, nginx 1.30 업그레이드.
 
 ---
 
 ## 1. 배포 전에 할 일 (순서대로)
 
-### ① 백엔드: Redisson 에도 비밀번호 적용 (선행 필수)
-
-Lettuce(`RedisConfig`)는 `REDIS_PASSWORD` 를 쓰지만 `RedissonConfig` 는 비밀번호를 넣지 않는다.
-Redis 에 비밀번호를 걸면 Redisson(분산 락·bucket4j)이 붙지 못한다. 이 수정이 들어간 백엔드 버전이 운영·스테이징에 먼저 떠 있어야 한다.
-
-### ② SSM 에 `REDIS_PASSWORD` 추가
-
-- `/dudoong/env/prod`, `/dudoong/env/staging` 에 `REDIS_PASSWORD=<값>` 줄을 추가한다 (아직 GitHub `ENV_VARS` 를 쓰는 서버라면 거기에도)
-- 값은 영숫자만: `openssl rand -hex 32`. `$`·따옴표·공백은 compose 와 앱이 다르게 읽을 수 있다
-- 값이 없거나 비어 있으면 compose 가 시작을 거부한다(`${REDIS_PASSWORD:?}`) → 스테이징 배포가 실패하고 운영으로 넘어가지 않는다
-- 운영과 스테이징은 다른 값을 쓴다
-
-### ③ Redis 버전 확인
-
-compose 는 `redis:8.10-alpine` 으로 고정한다. Redis 는 자기보다 새 버전이 쓴 RDB 를 못 읽으므로 서버에서 지금 버전을 확인한다.
-
-```bash
-sudo docker exec $(sudo docker ps -qf name=redis) redis-server --version
-```
-
-8.10 보다 높으면 compose 의 태그를 그 버전에 맞춘다.
-
-### ④ nginx 이미지 빌드
+### ① nginx 이미지 빌드
 
 compose 가 `water0641/dudoong-nginx:1.8.0` 을 쓴다. 머지하기 전에 PR 마지막 커밋에 `Nginx-v1.8.0` 태그를 push 해서 이미지를 먼저 만든다 (Actions "Build & Docker Push - Nginx").
 이미지가 없을 때 머지되면 `pull` 에서 스테이징 배포가 실패하고 운영은 그대로다 → 태그 빌드 후 Deployment 를 수동 실행하면 된다.
 
 ## 2. 배포할 때 생기는 일
 
-- **로그인 풀림**: Redis 설정이 바뀌어 컨테이너가 새로 만들어진다. compose 에 Redis 볼륨이 없고 새 이미지는 `/data` 볼륨도 선언하지 않아 기존 데이터가 넘어오지 않는다 → refresh token 이 사라진다 → 모든 사용자가 access token 만료(기본 1시간) 뒤 다시 로그인해야 한다. 이용이 적은 시간에 배포한다
-- 같은 이유로 진행 중이던 분산 락·rate limit 카운터도 초기화된다
 - 응답에 HSTS(1년, 하위 도메인 포함)·`X-Frame-Options: DENY`·`nosniff`·`Referrer-Policy` 가 붙는다. 다른 사이트가 두둥 페이지를 iframe 으로 넣으면 막힌다. 스테이징에서 결제(토스 → `/pay/confirm`) 1회 확인
 
 ## 3. 되돌리기
 
 - nginx: compose 의 이미지를 `1.7.0` 으로 되돌려 배포
-- Redis: `command` 를 지우면 비밀번호 없이 뜬다. 앱은 `REDIS_PASSWORD` 가 있어도 Redis 쪽에 비밀번호가 없으면 AUTH 오류가 나므로 SSM 값도 함께 지운다
 
 ---
 
@@ -73,9 +48,10 @@ compose 가 `water0641/dudoong-nginx:1.8.0` 을 쓴다. 머지하기 전에 PR �
 
 ### 확인
 
-- SSM 에서 prod·staging 값이 서로 다른지 확인: `REDIS_PASSWORD`·`MYSQL_USERNAME`·`MYSQL_PASSWORD`·`JWT_SECRET_KEY`
+- SSM 에서 prod·staging 값이 서로 다른지 확인: `MYSQL_USERNAME`·`MYSQL_PASSWORD`·`JWT_SECRET_KEY`
 - 스테이징에서 받은 토큰으로 운영 API 를 부르면 401 이어야 한다
 
 
 ## 하지 않기로 한 것
+- Redis 비밀번호: 환경변수 추가 부담 대비 효과가 작아 적용하지 않는다(2026-10-10 결정). Redis 는 host 네트워크지만 보안 그룹이 6379 를 외부에 열지 않는다.
 - `/internal-api` 접근 IP 제한: 운영자 접속 환경이 고정되어 있지 않아 적용하지 않는다(2026-10-10 결정). 운영 어드민 보호는 어드민 전용 토큰 분리(Backend #763)로 보강한다.
