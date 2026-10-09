@@ -56,6 +56,9 @@ Resources:
             Condition:
               ArnEquals:
                 ec2:SourceInstanceArn: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ProdInstanceId}
+              # IMDSv2 로 받은 자격 증명만 (백엔드 AWS SDK v2 는 IMDSv2 를 쓴다)
+              NumericGreaterThanEquals:
+                ec2:RoleDelivery: "2.0"
           - Effect: Allow
             Action:
               - ec2:StartInstances
@@ -64,6 +67,9 @@ Resources:
             Condition:
               ArnEquals:
                 ec2:SourceInstanceArn: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ProdInstanceId}
+              # IMDSv2 로 받은 자격 증명만 (백엔드 AWS SDK v2 는 IMDSv2 를 쓴다)
+              NumericGreaterThanEquals:
+                ec2:RoleDelivery: "2.0"
 
   # EventBridge Scheduler 실행 역할: 스테이징 끄기만
   AutoStopRole:

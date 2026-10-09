@@ -125,14 +125,15 @@ Resources:
           Essential: true
           # 이미지 원래 ENTRYPOINT 와 같은 java 옵션. 실행마다 BATCH_ARGS 만 바꾼다.
           # 1) DOTENV(SSM /dudoong/env/batch, .env 내용 통째로)를 한 줄씩 읽어 export 한다.
-          #    docker --env-file 과 같은 규칙: KEY=VALUE, '#' 주석·빈 줄 무시, 값은 해석하지 않고 그대로.
+          #    docker --env-file 과 같은 규칙: KEY=VALUE, '#' 주석·빈 줄·'=' 없는 줄 무시, 앞 공백·CRLF 의 \r 제거,
+          #    값은 해석하지 않고 그대로. 셸 변수 이름이 될 수 없는 키(점·대시 포함)는 건너뛴다.
           # 2) Redis 는 같은 태스크의 사이드카(비밀번호 없음)로 덮어쓴다.
           # 3) BATCH_ARGS 안의 자리표시자 $TODAY(KST yyyy-MM-dd), $RUN_ID(epoch 초)만 글자 그대로 바꾸고
           #    셸로 해석(eval)하지 않는다 → 인자에 명령이 섞여도 실행되지 않는다.
           # 이미지에 시간대 파일이 없어 POSIX 표기 KST-9 를 쓴다
           EntryPoint: ["sh", "-c"]
           Command:
-            - 'set -f; printf "%s\n" "$DOTENV" > /tmp/.env; unset DOTENV; while IFS= read -r line || [ -n "$line" ]; do case "$line" in ""|"#"*) continue ;; esac; key=${line%%=*}; case "$key" in ""|*[!A-Za-z0-9_]*) continue ;; esac; export "$key=${line#*=}"; done < /tmp/.env; rm -f /tmp/.env; export REDIS_HOST=localhost REDIS_PORT=6379; unset REDIS_PASSWORD; TODAY=$(TZ=KST-9 date +%F); RUN_ID=$(date +%s); set -- $(printf "%s" "$BATCH_ARGS" | sed -e "s/\$TODAY/$TODAY/g" -e "s/\$RUN_ID/$RUN_ID/g"); exec java -Dspring.profiles.active="$PROFILE" -Djava.security.egd=file:/dev/./urandom -Duser.timezone=Asia/Seoul -jar /app.jar "$@"'
+            - 'set -f; printf "%s\n" "$DOTENV" > /tmp/.env; unset DOTENV; cr=$(printf "\r"); while IFS= read -r line || [ -n "$line" ]; do line=${line%"$cr"}; line=${line#"${line%%[![:space:]]*}"}; case "$line" in ""|"#"*) continue ;; *=*) ;; *) continue ;; esac; key=${line%%=*}; case "$key" in ""|*[!A-Za-z0-9_]*) continue ;; esac; export "$key=${line#*=}"; done < /tmp/.env; rm -f /tmp/.env; export REDIS_HOST=localhost REDIS_PORT=6379; unset REDIS_PASSWORD; TODAY=$(TZ=KST-9 date +%F); RUN_ID=$(date +%s); set -- $(printf "%s" "$BATCH_ARGS" | sed -e "s/\$TODAY/$TODAY/g" -e "s/\$RUN_ID/$RUN_ID/g"); exec java -Dspring.profiles.active="$PROFILE" -Djava.security.egd=file:/dev/./urandom -Duser.timezone=Asia/Seoul -jar /app.jar "$@"'
           Secrets:
             - Name: DOTENV
               ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/dudoong/env/batch

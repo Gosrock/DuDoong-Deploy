@@ -15,11 +15,12 @@ permissions:
 jobs:
   copy:
     runs-on: ubuntu-latest
+    # 승인자가 승인해야 시작한다 (정산 job 은 호스트에게 메일·알림톡을 실제로 보낸다)
+    environment: DuDoong-Infra
     steps:
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          # main 브랜치에서 실행할 때만 역할을 맡을 수 있다 (역할 신뢰 정책)
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/dudoong-github-batch
           aws-region: ap-northeast-2
           mask-aws-account-id: true

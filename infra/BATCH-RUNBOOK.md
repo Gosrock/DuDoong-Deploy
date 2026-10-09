@@ -36,7 +36,7 @@
 2. Actions **"Batch Image Copy"** 실행 (tag `1.0.5-1`)
 
 - 배치 env 는 SSM `/dudoong/env/batch` 를 ECS 가 태스크에 넣는다. 진입 스크립트가 `docker --env-file` 과 같은 규칙으로 읽는다(값을 해석하지 않음 — 실제 이미지로 비교 확인). Redis 는 사이드카(`localhost:6379`, 비밀번호 없음)로 덮어쓴다
-- 배치 반영 역할은 **main 브랜치에서 돈 워크플로만** 맡을 수 있고, PR 은 실행 권한 없는 미리보기 역할만 맡는다. **콘솔에서 변경 세트를 직접 실행(Execute)하지 않는다**
+- 배치 반영 역할은 **GitHub Environment `DuDoong-Infra`(필수 승인자 + main 만) 승인을 받은 job 만** 맡을 수 있고, PR 은 실행 권한 없는 미리보기 역할만 맡는다. **콘솔에서 변경 세트를 직접 실행(Execute)하지 않는다**
 
 ## 2. 확인 (스케줄 꺼진 상태)
 

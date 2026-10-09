@@ -28,9 +28,13 @@ done
 aws() { command aws --region "$REGION" "$@"; }
 put() { aws ssm put-parameter --name "$1" --type "$2" --value "$3" --overwrite > /dev/null; echo "  등록: $1 = $3"; }
 exists() { aws ssm get-parameter --name "$1" > /dev/null 2>&1; }
+# 같은 Name 태그가 여러 대면 엉뚱한 서버가 잡히므로 정확히 1대일 때만 쓴다
 instance_id() {
-  aws ec2 describe-instances --filters "Name=tag:Name,Values=$1" "Name=instance-state-name,Values=pending,running,stopping,stopped" \
-    --query 'Reservations[0].Instances[0].InstanceId' --output text
+  ids=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$1" "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+    --query 'Reservations[].Instances[].InstanceId' --output text)
+  n=$(echo "$ids" | wc -w | tr -d ' ')
+  if [ "$n" != "1" ]; then echo "Name=$1 인 인스턴스가 $n 대 — 1대여야 한다" >&2; exit 1; fi
+  echo "$ids"
 }
 
 echo "== 인프라 설정값 (/dudoong/infra/*)"
@@ -58,14 +62,19 @@ fi
 exists /dudoong/infra/batch-schedules-state || put /dudoong/infra/batch-schedules-state String DISABLED
 exists /dudoong/infra/batch-image-tag || put /dudoong/infra/batch-image-tag String 1.0.5-1
 exists /dudoong/infra/staging-auto-stop-state || put /dudoong/infra/staging-auto-stop-state String DISABLED
+# 상태 값은 대문자 ENABLED / DISABLED 만 쓴다 (오타면 스택 반영이 실패하고 롤백된다)
 
 for name in "${!ENV_FILES[@]}"; do
   file="${ENV_FILES[$name]}"
   [ -f "$file" ] || { echo "파일 없음: $file"; exit 1; }
   size=$(wc -c < "$file")
   tier=Standard; [ "$size" -gt 4096 ] && tier=Advanced
-  lines=$(grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' "$file" || true)
+  lines=$(grep -cE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' "$file" || true)
+  odd=$(grep -vE '^[[:space:]]*($|#|[A-Za-z_][A-Za-z0-9_]*=)' "$file" | wc -l | tr -d ' ')
   echo "== /dudoong/env/$name ($size 바이트, 변수 $lines 개, $tier)"
+  if [ "$odd" != "0" ]; then
+    echo "  ⚠️ 변수로 쓰이지 않는 줄 $odd 개 ('=' 없음 또는 키에 점·대시). 배치에서는 건너뛰므로 확인할 것 (내용은 출력하지 않음)"
+  fi
   if [ "$name" != "staging" ] && ! grep -q '^PROFILE=prod$' "$file"; then
     echo "  ⚠️ PROFILE=prod 줄이 없다. 이미지 기본값(dev 등)으로 뜰 수 있으니 확인할 것"
   fi

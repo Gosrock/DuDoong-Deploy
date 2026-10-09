@@ -1,11 +1,11 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   DuDoong-Deploy 배치 워크플로용 역할 (WorkBook EP09 4단계, Deploy #25·#28).
-  - 반영 역할: main 브랜치에서 돈 워크플로만 (머지·수동 실행·이미지 복사)
+  - 반영 역할: GitHub Environment DuDoong-Infra 의 job 만 (승인자 필수 + main 브랜치만) — 머지 반영·수동 실행·이미지 복사
   - 미리보기 역할: PR 에서 변경 세트 보기만 (실행 권한 없음)
   - CloudFormation 실행 역할은 배치 스택 리소스만 다루고, 만드는 IAM 역할에는 권한 경계를 강제해
     템플릿을 고쳐도 계정 권한으로 올라갈 수 없게 한다
-  GitHub Environment 를 새로 만들 필요 없다. main 브랜치 보호(PR 리뷰 필수)를 켜 둔다.
+  DuDoong-Infra 에는 secret 을 두지 않는다 (승인 관문 역할만). 계정 ID 는 리포지토리 secret AWS_ACCOUNT_ID.
 
 # 배포 (1회, 관리자 계정 — CloudShell). 값은 SSM(/dudoong/infra/*)에서 읽는다:
 #   aws cloudformation deploy --stack-name dudoong-github-batch-role \
@@ -81,8 +81,8 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                # main 브랜치에서 돈 워크플로만 (push·workflow_dispatch). PR 브랜치에서는 맡을 수 없다
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:ref:refs/heads/main
+                # 승인자가 승인한 DuDoong-Infra job 만 (Environment 보호 규칙: 필수 승인자 + main 브랜치만)
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:DuDoong-Infra
       Policies:
         - PolicyName: batch-ops
           PolicyDocument:

@@ -39,6 +39,9 @@ Resources:
             Condition:
               ArnEquals:
                 ec2:SourceInstanceArn: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ProdInstanceId}
+              # IMDSv2 로 받은 자격 증명만. 운영 서버는 IMDSv1 도 열려 있어 SSRF 로 자격 증명이 새도 .env 는 못 읽게
+              NumericGreaterThanEquals:
+                ec2:RoleDelivery: "2.0"
           - Sid: StagingServerReadsStagingEnv
             Effect: Allow
             Action: ssm:GetParameter
@@ -46,6 +49,8 @@ Resources:
             Condition:
               ArnEquals:
                 ec2:SourceInstanceArn: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${StagingInstanceId}
+              NumericGreaterThanEquals:
+                ec2:RoleDelivery: "2.0"
           # SecureString(aws/ssm 키) 복호화 — SSM 을 통한 호출에만
           - Sid: DecryptViaSsmOnly
             Effect: Allow
