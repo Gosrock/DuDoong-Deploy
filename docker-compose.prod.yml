@@ -60,7 +60,7 @@ services:
       - admin
       - internal-admin
     restart: always
-    image: water0641/dudoong-nginx:1.7.0
+    image: water0641/dudoong-nginx:1.8.0
     environment:
       - TZ=Asia/Seoul
     logging:
