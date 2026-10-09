@@ -17,6 +17,10 @@ jobs:
           RELEASE_VERSION_WITHOUT_V="$(cut -d'v' -f2 <<< ${GITHUB_REF#refs/*/})"
           echo "VERSION=$RELEASE_VERSION_WITHOUT_V" >> $GITHUB_OUTPUT
 
+      # 운영·스테이징 t4g(ARM) 전환 (Deploy #41) — amd64 + arm64 멀티 아키
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -31,6 +35,6 @@ jobs:
         with:
           context: ./nginx
           file: ./nginx/Dockerfile
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: water0641/dudoong-nginx:${{ steps.get_version.outputs.VERSION }}
