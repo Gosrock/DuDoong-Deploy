@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  운영·스테이징 서버가 Let's Encrypt 인증서를 DNS 검증으로 발급·갱신하는 권한 (Deploy #37, WorkBook EP09 5단계).
+  서버는 자기 도메인의 _acme-challenge TXT 레코드만 만들고 지울 수 있다.
+  두 서버가 같은 인스턴스 역할을 쓰므로, 요청한 서버(ec2:SourceInstanceArn)로 도메인을 나눈다.
+
+# 배포 (관리자 계정 — CloudShell). 값은 SSM(/dudoong/infra/*)에서 읽는다:
+#   aws cloudformation deploy --stack-name dudoong-tls-cert-access \
+#     --template-file infra/tls-cert-access.yml --capabilities CAPABILITY_NAMED_IAM
+
+Parameters:
+  ProdInstanceId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/prod-instance-id
+  StagingInstanceId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/staging-instance-id
+  HostedZoneId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/hosted-zone-id
+    Description: dudoong.com 호스티드 존
+  InstanceRoleName:
+    Type: String
+    Default: ec2-docker-log-write-iam
+    Description: 운영·스테이징 EC2 인스턴스 역할 이름
+
+Resources:
+  TlsCertPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: dudoong-tls-cert-dns
+      Description: 서버가 자기 도메인의 ACME DNS 검증 TXT 레코드만 관리
+      Roles:
+        - !Ref InstanceRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # certbot 이 호스티드 존을 찾고 변경 반영을 기다리는 데 쓴다 (리소스 단위로 제한할 수 없다)
+          - Sid: FindZoneAndWaitChange
+            Effect: Allow
+            Action:
+              - route53:ListHostedZones
+              - route53:GetChange
+            Resource: "*"
+            Condition:
+              NumericGreaterThanEquals:
+                ec2:RoleDelivery: "2.0"
+          - Sid: ProdServerAcmeRecords
+            Effect: Allow
+            Action: route53:ChangeResourceRecordSets
+            Resource: !Sub arn:aws:route53:::hostedzone/${HostedZoneId}
+            Condition:
+              ArnEquals:
+                ec2:SourceInstanceArn: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ProdInstanceId}
+              # IMDSv2 로 받은 자격 증명만 (운영 서버는 IMDSv1 도 열려 있다 — Deploy #27)
+              NumericGreaterThanEquals:
+                ec2:RoleDelivery: "2.0"
+              ForAllValues:StringEquals:
+                route53:ChangeResourceRecordSetsNormalizedRecordNames:
+                  - _acme-challenge.dudoong.com
+                  - _acme-challenge.internal-admin.dudoong.com
+                route53:ChangeResourceRecordSetsRecordTypes: TXT
+              # ForAllValues 는 값이 비면 참이 되므로 값이 꼭 있게 한다
+              "Null":
+                route53:ChangeResourceRecordSetsNormalizedRecordNames: "false"
+          - Sid: StagingServerAcmeRecords
+            Effect: Allow
+            Action: route53:ChangeResourceRecordSets
+            Resource: !Sub arn:aws:route53:::hostedzone/${HostedZoneId}
+            Condition:
+              ArnEquals:
+                ec2:SourceInstanceArn: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${StagingInstanceId}
+              NumericGreaterThanEquals:
+                ec2:RoleDelivery: "2.0"
+              ForAllValues:StringEquals:
+                route53:ChangeResourceRecordSetsNormalizedRecordNames:
+                  - _acme-challenge.staging.dudoong.com
+                  - _acme-challenge.staging-internal-admin.dudoong.com
+                route53:ChangeResourceRecordSetsRecordTypes: TXT
+              # ForAllValues 는 값이 비면 참이 되므로 값이 꼭 있게 한다
+              "Null":
+                route53:ChangeResourceRecordSetsNormalizedRecordNames: "false"
+
+Outputs:
+  PolicyArn:
+    Value: !Ref TlsCertPolicy

@@ -50,6 +50,7 @@ cf dudoong-server-env-access   server-env-access.yml      # 서버가 자기 .en
 cf dudoong-staging-control     staging-control.yml        # 어드민 스테이징 켜기/끄기 + 02:00 자동 종료(처음엔 꺼짐)
 aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com || true   # ECS 처음 사용
 cf dudoong-github-batch-role   github-batch-role.yml      # 배치 워크플로 역할 + 권한 경계
+cf dudoong-tls-cert-access    tls-cert-access.yml        # 서버가 자기 도메인 _acme-challenge TXT 만 고치는 권한 (HTTPS 인증서)
 
 # ③ 받은 파일 지우기 (CloudShell 홈은 계속 남는 저장소다)
 rm -f ~/prod.env ~/staging.env ~/batch.env && ls ~/*.env 2>/dev/null || echo "지움"

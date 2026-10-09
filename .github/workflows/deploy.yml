@@ -10,6 +10,7 @@ on:
       - .github/workflows/batch-*.yml
       - .github/workflows/infra-*.yml
       - .github/workflows/staging-power.yml
+      - .github/workflows/tls-check.yml
 
 permissions:
   contents: read
@@ -100,6 +101,7 @@ jobs:
           script: |
             sh ~/srv/ubuntu/docker-install.sh
             sh ~/srv/ubuntu/scripts/fetch-env.sh staging || exit 1
+            sh ~/srv/ubuntu/scripts/tls-cert.sh staging || exit 1
             echo "start docker-compose up: ubuntu"
             sudo docker-compose -v
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.staging.yml pull
