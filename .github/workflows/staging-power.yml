@@ -1,6 +1,7 @@
 name: Staging Power
 # 스테이징 서버 켜기·끄기·상태 확인 (WorkBook EP09). 평소에는 꺼 두고 필요할 때만 켠다.
-# - 켜기: 서버만 켠다. 컨테이너는 restart: unless-stopped 로 이전 상태 그대로 다시 뜬다 (새 코드 반영은 Deployment 워크플로)
+# - 켜기: 서버를 켜고 Deployment 와 같은 단계(staging-deploy.yml)로 main 최신 버전을 배포·헬스체크한다
+#         (Deployment 는 스테이징이 꺼져 있으면 건너뛰므로, 꺼져 있던 동안의 변경도 켤 때 반영된다)
 # - 끄기: 매일 02:00(KST) 자동 종료와 같은 동작을 지금 바로 한다
 # 역할은 배포와 같은 dudoong-github-staging-deploy (스테이징 인스턴스 한 대만 켜고 끌 수 있다)
 on:
@@ -19,14 +20,14 @@ permissions:
   contents: read
   id-token: write
 
-concurrency:
-  group: deploy-staging-server
-  cancel-in-progress: false
-
 jobs:
   power:
     runs-on: ubuntu-latest
     environment: DuDoong-Staging
+    # 배포와 같은 그룹: 배포 중에는 켜기·끄기가 기다린다 (켜기 뒤 배포 job 은 이 job 이 끝난 다음 같은 그룹을 잡는다)
+    concurrency:
+      group: deploy-staging-server
+      cancel-in-progress: false
     steps:
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -48,13 +49,7 @@ jobs:
               [ "$s" = stopping ] && aws ec2 wait instance-stopped --instance-ids "$INSTANCE_ID"
               aws ec2 start-instances --instance-ids "$INSTANCE_ID" > /dev/null
               aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-              echo "서버 켜짐 → 앱 응답 대기 (https://staging.dudoong.com)"
-              for i in $(seq 1 36); do
-                code=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://staging.dudoong.com/api/v1/examples/health || true)
-                [ "$code" = 200 ] && { echo "앱 정상 (try $i)"; break; }
-                sleep 10
-              done
-              [ "$code" = 200 ] || { echo "::error::서버는 켜졌지만 앱이 6분 안에 응답하지 않음"; exit 1; }
+              echo "서버 켜짐 → 이어서 최신 버전 배포 (deploy job)"
               ;;
             stop)
               aws ec2 stop-instances --instance-ids "$INSTANCE_ID" > /dev/null
@@ -63,3 +58,10 @@ jobs:
           esac
           s=$(state); echo "최종 상태: $s"
           echo "### 스테이징: \`$s\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # 켜기: 배포 파이프라인과 같은 스테이징 배포 단계 (fetch-env·인증서·compose·헬스체크)
+  deploy:
+    needs: power
+    if: ${{ inputs.action == 'start' }}
+    uses: ./.github/workflows/staging-deploy.yml
+    secrets: inherit

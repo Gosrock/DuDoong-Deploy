@@ -73,6 +73,6 @@ rm -f ~/prod.env ~/staging.env ~/batch.env && ls ~/*.env 2>/dev/null || echo "�
 - 다음 배포 로그에 `.env: SSM /dudoong/env/staging 사용`, `... /dudoong/env/prod 사용` 이 나오면 서버 이관 끝
 - 스테이징 자동 종료 켜기: SSM `/dudoong/infra/staging-auto-stop-state` = `ENABLED` (대문자) → `cf dudoong-staging-control staging-control.yml` 다시 실행
 - SSM 값만 바꾸면 자동 반영되지 않는다: 앱 `.env` 는 다음 배포 때, 배치 값은 Actions "Infra Deploy (batch)" 수동 실행, 그 밖의 스택은 `cf ...` 다시 실행
-- 스테이징 수동 켜기·끄기: Actions → "Staging Power" (status / start / stop). 켜기는 서버만 켜고, 새 코드 반영은 Deployment
+- 스테이징 켜기·끄기는 Actions → "Staging Power" (status / start / stop) 에서만. start 는 켠 뒤 main 최신 버전을 배포한다. Deployment(main 머지)는 스테이징이 꺼져 있으면 스테이징 배포를 건너뛴다
 - 배치: `infra/BATCH-RUNBOOK.md`
 - 내부 어드민 스테이징 버튼: 운영 .env(SSM `/dudoong/env/prod`)에 `STAGING_INSTANCE_ID=<스테이징 인스턴스 ID>` 줄을 추가하고 백엔드 새 버전 배포 (dev → v2 DDL 먼저)
