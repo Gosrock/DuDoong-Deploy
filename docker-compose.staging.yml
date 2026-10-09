@@ -1,9 +1,11 @@
 version: "3.7"
 services:
   redis:
+    restart: unless-stopped
     image: "redis:alpine"
     network_mode: "host"
   backend:
+    restart: unless-stopped
     image: water0641/dudoong-api:2.2.5
     container_name: backend
     env_file:
@@ -18,6 +20,7 @@ services:
         awslogs-region: "ap-northeast-2"
         awslogs-stream: "backend"
   front:
+    restart: unless-stopped
     image: david0218/dudoong-ticket:dev
     container_name: front
     network_mode: "host"
@@ -30,12 +33,14 @@ services:
         awslogs-region: "ap-northeast-2"
         awslogs-stream: "front"
   admin:
+    restart: unless-stopped
     image: david0218/dudoong-admin:dev
     container_name: admin
     network_mode: "host"
     environment:
       - TZ=Asia/Seoul
   internal-admin:
+    restart: unless-stopped
     image: water0641/dudoong-internal-admin:0.6.0
     container_name: internal-admin
     network_mode: "host"
