@@ -27,3 +27,15 @@ then
   sudo curl -fL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-$(uname -m)" -o /usr/local/bin/docker-compose
   sudo chmod +x /usr/local/bin/docker-compose
 fi
+
+# 스왑 2GB (없을 때만). 1~2GB 메모리 서버에 컨테이너 6개 + JVM 이라 스왑이 없으면 백엔드 기동이 10분 넘게 걸린다 (Deploy #41)
+if ! swapon --show | grep -q /swapfile
+then
+  echo "swapfile does not exist"
+  echo "Start creating 2G swapfile"
+  sudo fallocate -l 2G /swapfile
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+fi
+grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab > /dev/null
