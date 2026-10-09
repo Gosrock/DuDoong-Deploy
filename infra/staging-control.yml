@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  스테이징 서버 켜기/끄기 권한 + 매일 02:00 KST 자동 종료 (WorkBook EP09 3단계).
+  내부 어드민(운영 백엔드)이 EC2 인스턴스 역할로 스테이징 1대만 조회·켜기·끄기 할 수 있다.
+
+# 배포 (1회, 쓰기 권한 있는 계정으로):
+#   aws cloudformation deploy --stack-name dudoong-staging-control \
+#     --template-file infra/staging-control.yml --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides StagingInstanceId=<스테이징 인스턴스 ID>
+# InstanceRoleName 기본값은 운영 EC2 인스턴스 프로파일 이름과 같은 역할 이름을 가정한다.
+# 다르면 InstanceRoleName=<실제 역할 이름> 을 추가한다 (IAM 콘솔 → 인스턴스 프로파일에서 확인).
+# 운영 .env(GitHub Environment DuDoong-Production 시크릿 ENV_VARS)에 STAGING_INSTANCE_ID 를 추가해야 어드민 기능이 켜진다.
+
+Parameters:
+  StagingInstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: 스테이징 EC2 인스턴스 ID
+  InstanceRoleName:
+    Type: String
+    Default: ec2-docker-log-write-iam
+    Description: 운영 EC2 인스턴스 역할 이름 (내부 어드민 백엔드가 쓰는 역할)
+  AutoStopCron:
+    Type: String
+    Default: cron(0 2 * * ? *)
+    Description: 자동 종료 시각 (Asia/Seoul)
+
+Resources:
+  # 운영 백엔드(인스턴스 역할)에 붙는 권한: 스테이징 1대만 켜기·끄기
+  StagingControlPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: dudoong-staging-control
+      Description: 내부 어드민에서 스테이징 서버 조회·켜기·끄기
+      Roles:
+        - !Ref InstanceRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Describe 계열은 리소스 단위로 제한할 수 없다
+          - Effect: Allow
+            Action: ec2:DescribeInstances
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - ec2:StartInstances
+              - ec2:StopInstances
+            Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${StagingInstanceId}
+
+  # EventBridge Scheduler 실행 역할: 스테이징 끄기만
+  AutoStopRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dudoong-staging-auto-stop
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: stop-staging
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ec2:StopInstances
+                Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${StagingInstanceId}
+
+  AutoStopSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: dudoong-staging-auto-stop
+      Description: 깜빡 켜둔 스테이징을 매일 새벽에 끈다
+      ScheduleExpression: !Ref AutoStopCron
+      ScheduleExpressionTimezone: Asia/Seoul
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: ENABLED
+      Target:
+        # 이미 꺼져 있으면 StopInstances는 아무 일도 하지 않는다
+        Arn: arn:aws:scheduler:::aws-sdk:ec2:stopInstances
+        RoleArn: !GetAtt AutoStopRole.Arn
+        Input: !Sub '{"InstanceIds":["${StagingInstanceId}"]}'
+        RetryPolicy:
+          MaximumRetryAttempts: 3
+
+Outputs:
+  PolicyArn:
+    Value: !Ref StagingControlPolicy
+  ScheduleName:
+    Value: !Ref AutoStopSchedule
