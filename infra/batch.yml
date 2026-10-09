@@ -266,7 +266,8 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Effect: Allow
+          - Sid: AllowBatchFailureRules
+            Effect: Allow
             Principal:
               Service: events.amazonaws.com
             Action: sns:Publish
@@ -276,7 +277,8 @@ Resources:
                 aws:SourceArn:
                   - !GetAtt FailedTaskRule.Arn
                   - !GetAtt TaskFailedToStartRule.Arn
-          - Effect: Allow
+          - Sid: AllowDlqAlarm
+            Effect: Allow
             Principal:
               Service: cloudwatch.amazonaws.com
             Action: sns:Publish
