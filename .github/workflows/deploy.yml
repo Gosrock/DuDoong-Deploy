@@ -29,16 +29,12 @@ jobs:
     concurrency:
       group: deploy-staging-server
       cancel-in-progress: false
-    env:
-      HAS_ROLE: ${{ secrets.AWS_ACCOUNT_ID != '' }}
     steps:
       - name: checkout
         uses: actions/checkout@v4
 
-      # 스테이징은 평소 꺼둔다 (WorkBook EP09). 꺼져 있으면 켜고, 바뀐 퍼블릭 IP를 조회한다.
-      # secret AWS_ACCOUNT_ID 가 없으면 기존처럼 secrets.HOST 사용.
+      # 스테이징은 평소 꺼둔다 (WorkBook EP09). 꺼져 있으면 켜고, IP(고정 IP)를 조회한다.
       - name: configure aws credentials
-        if: ${{ env.HAS_ROLE == 'true' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/dudoong-github-staging-deploy
@@ -46,7 +42,6 @@ jobs:
           mask-aws-account-id: true
 
       - name: ensure staging is running
-        if: ${{ env.HAS_ROLE == 'true' }}
         run: |
           INSTANCE_ID=$(aws ssm get-parameter --name /dudoong/infra/staging-instance-id --query Parameter.Value --output text)
           echo "::add-mask::$INSTANCE_ID"
@@ -66,15 +61,6 @@ jobs:
           echo "::add-mask::$ip"
           echo "STAGING_HOST=$ip" >> "$GITHUB_ENV"
 
-      - name: fallback to fixed host
-        if: ${{ env.HAS_ROLE != 'true' }}
-        run: echo "STAGING_HOST=${{ secrets.HOST }}" >> "$GITHUB_ENV"
-
-      # 이관 기간용: SSM 에 값이 없을 때만 서버에서 이 .env 가 쓰인다 (scripts/fetch-env.sh)
-      - name: create env file
-        run: |
-          touch .env
-          echo "${{ secrets.ENV_VARS }}" >> .env
       - name: create remote directory
         uses: appleboy/ssh-action@v1
         with:
@@ -142,11 +128,6 @@ jobs:
       - name: checkout
         uses: actions/checkout@v4
 
-      # 이관 기간용: SSM 에 값이 없을 때만 서버에서 이 .env 가 쓰인다 (scripts/fetch-env.sh)
-      - name: create env file
-        run: |
-          touch .env
-          echo "${{ secrets.ENV_VARS }}" >> .env
       - name: create remote directory
         uses: appleboy/ssh-action@v1
         with:
