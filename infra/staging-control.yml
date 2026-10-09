@@ -6,7 +6,7 @@ Description: >
 # 배포 (1회, 쓰기 권한 있는 계정으로):
 #   aws cloudformation deploy --stack-name dudoong-staging-control \
 #     --template-file infra/staging-control.yml --capabilities CAPABILITY_NAMED_IAM \
-#     --parameter-overrides StagingInstanceId=<스테이징 인스턴스 ID>
+#     --parameter-overrides StagingInstanceId=<스테이징 인스턴스 ID> ProdInstanceId=<운영 인스턴스 ID>
 # InstanceRoleName 기본값은 운영 EC2 인스턴스 프로파일 이름과 같은 역할 이름을 가정한다.
 # 다르면 InstanceRoleName=<실제 역할 이름> 을 추가한다 (IAM 콘솔 → 인스턴스 프로파일에서 확인).
 # 운영 .env(GitHub Environment DuDoong-Production 시크릿 ENV_VARS)에 STAGING_INSTANCE_ID 를 추가해야 어드민 기능이 켜진다.
@@ -17,6 +17,11 @@ Parameters:
   StagingInstanceId:
     Type: AWS::EC2::Instance::Id
     Description: 스테이징 EC2 인스턴스 ID
+  ProdInstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: >
+      운영 EC2 인스턴스 ID. 운영·스테이징이 같은 인스턴스 역할을 써서,
+      이 서버에서 나온 요청(ec2:SourceInstanceArn)에만 권한을 준다
   InstanceRoleName:
     Type: String
     Default: ec2-docker-log-write-iam
@@ -45,15 +50,22 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          # 같은 역할을 쓰는 스테이징(인터넷 노출)에서 탈취된 자격 증명으로는 쓰지 못하게 운영 서버 요청만 허용
           # Describe 계열은 리소스 단위로 제한할 수 없다
           - Effect: Allow
             Action: ec2:DescribeInstances
             Resource: "*"
+            Condition:
+              ArnEquals:
+                ec2:SourceInstanceArn: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ProdInstanceId}
           - Effect: Allow
             Action:
               - ec2:StartInstances
               - ec2:StopInstances
             Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${StagingInstanceId}
+            Condition:
+              ArnEquals:
+                ec2:SourceInstanceArn: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ProdInstanceId}
 
   # EventBridge Scheduler 실행 역할: 스테이징 끄기만
   AutoStopRole:
