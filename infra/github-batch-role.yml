@@ -1,24 +1,27 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   DuDoong-Deploy 배치 워크플로용 역할 (WorkBook EP09 4단계, Deploy #25).
-  GitHub Actions(DuDoong-Infra Environment)가 batch 이미지 복사, 배치 수동 실행, infra/batch.yml 반영(GitOps)을 한다.
+  - DuDoong-Infra Environment: 이미지 복사, 배치 수동 실행, infra/batch.yml 반영 (main 브랜치만 허용하도록 Environment 보호 규칙을 건다)
+  - DuDoong-Infra-Preview Environment: PR 에서 변경 세트 미리보기만 (실행 권한 없음)
 
 # 배포 (1회, 쓰기 권한 계정으로. github-deploy-role 스택으로 GitHub OIDC 공급자가 이미 있다는 전제):
 #   aws cloudformation deploy --stack-name dudoong-github-batch-role \
 #     --template-file infra/github-batch-role.yml --capabilities CAPABILITY_NAMED_IAM
-# 출력 GitHubRoleArn → GitHub Environment(DuDoong-Infra) 변수 AWS_ROLE_ARN
-# 출력 CfnExecutionRoleArn → 같은 Environment 변수 CFN_EXEC_ROLE_ARN
+# 출력 → GitHub 변수 (런북 1단계 표)
 
 Parameters:
   GitHubRepo:
     Type: String
     Default: Gosrock/DuDoong-Deploy
-  GitHubEnvironment:
+  ApplyEnvironment:
     Type: String
     Default: DuDoong-Infra
+  PreviewEnvironment:
+    Type: String
+    Default: DuDoong-Infra-Preview
 
 Resources:
-  # GitHub Actions 가 맡는 역할: 직접 리소스를 만들지 않고, 스택 반영은 아래 실행 역할에 맡긴다
+  # 반영·운영용: main 머지, 수동 실행, 이미지 복사
   GitHubRole:
     Type: AWS::IAM::Role
     Properties:
@@ -34,7 +37,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:${GitHubEnvironment}
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:${ApplyEnvironment}
       Policies:
         - PolicyName: batch-ops
           PolicyDocument:
@@ -73,11 +76,47 @@ Resources:
                   - cloudformation:DeleteChangeSet
                   - cloudformation:DescribeStacks
                   - cloudformation:DescribeStackEvents
-                  - cloudformation:GetTemplateSummary
                 Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/dudoong-batch/*
               - Effect: Allow
                 Action: cloudformation:GetTemplateSummary
                 Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CfnExecutionRole.Arn
+
+  # PR 미리보기 전용: 변경 세트를 만들고 보고 지울 수만 있다 (ExecuteChangeSet 없음)
+  GitHubPreviewRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dudoong-github-batch-preview
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:${PreviewEnvironment}
+      Policies:
+        - PolicyName: batch-preview
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeStacks
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/dudoong-batch/*
+              - Effect: Allow
+                Action: cloudformation:GetTemplateSummary
+                Resource: "*"
+              # 변경 세트에 실행 역할을 지정하려면 필요하다 (실행은 못 함)
               - Effect: Allow
                 Action: iam:PassRole
                 Resource: !GetAtt CfnExecutionRole.Arn
@@ -106,14 +145,20 @@ Resources:
                   - logs:*
                   - scheduler:*
                   - sns:*
+                  - sqs:*
                   - events:*
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:TagResource
+                  - cloudwatch:UntagResource
+                  - cloudwatch:ListTagsForResource
                   - s3:CreateBucket
+                  - s3:Get*
+                  - s3:List*
                   - s3:PutBucket*
                   - s3:PutEncryptionConfiguration
                   - s3:PutLifecycleConfiguration
-                  - s3:GetBucket*
-                  - s3:GetEncryptionConfiguration
-                  - s3:ListBucket
                   - ec2:Describe*
                   - ec2:CreateSecurityGroup
                   - ec2:DeleteSecurityGroup
@@ -122,7 +167,15 @@ Resources:
                   - ec2:RevokeSecurityGroupIngress
                   - ec2:RevokeSecurityGroupEgress
                   - ec2:CreateTags
+                  - ec2:DeleteTags
                 Resource: "*"
+              # 계정에 ECS 를 처음 쓰므로 ECS 서비스 연결 역할(AWSServiceRoleForECS)을 만들 수 있어야 한다
+              - Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName: ecs.amazonaws.com
               # IAM 은 dudoong-batch-* 역할만
               - Effect: Allow
                 Action:
@@ -131,9 +184,13 @@ Resources:
                   - iam:GetRole
                   - iam:UpdateRole
                   - iam:TagRole
+                  - iam:UntagRole
                   - iam:PutRolePolicy
                   - iam:DeleteRolePolicy
                   - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListRoleTags
                   - iam:AttachRolePolicy
                   - iam:DetachRolePolicy
                   - iam:UpdateAssumeRolePolicy
@@ -144,6 +201,9 @@ Outputs:
   GitHubRoleArn:
     Description: GitHub Environment(DuDoong-Infra) 변수 AWS_ROLE_ARN
     Value: !GetAtt GitHubRole.Arn
+  GitHubPreviewRoleArn:
+    Description: GitHub Environment(DuDoong-Infra-Preview) 변수 AWS_ROLE_ARN
+    Value: !GetAtt GitHubPreviewRole.Arn
   CfnExecutionRoleArn:
-    Description: GitHub Environment(DuDoong-Infra) 변수 CFN_EXEC_ROLE_ARN
+    Description: 리포지토리 변수 CFN_EXEC_ROLE_ARN
     Value: !GetAtt CfnExecutionRole.Arn

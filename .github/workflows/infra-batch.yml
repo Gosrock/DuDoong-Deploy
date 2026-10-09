@@ -22,7 +22,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: DuDoong-Infra
+    # PR 은 미리보기 전용 역할(실행 권한 없음), main·수동 실행은 반영 역할
+    environment: ${{ github.event_name == 'pull_request' && 'DuDoong-Infra-Preview' || 'DuDoong-Infra' }}
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -42,6 +43,8 @@ jobs:
       # 스택 파라미터는 Environment 변수에 둔다 (퍼블릭 리포라 리소스 ID 를 파일에 쓰지 않음)
       - name: deploy stack
         if: ${{ vars.AWS_ROLE_ARN != '' }}
+        # bash 를 명시해야 pipefail 이 켜져 deploy 실패가 tee 에 가려지지 않는다
+        shell: bash
         env:
           MODE: ${{ github.event_name == 'pull_request' && 'preview' || 'apply' }}
           CFN_EXEC_ROLE_ARN: ${{ vars.CFN_EXEC_ROLE_ARN }}
@@ -50,6 +53,8 @@ jobs:
           RDS_SG_ID: ${{ vars.RDS_SECURITY_GROUP_ID }}
           SCHEDULES_STATE: ${{ vars.BATCH_SCHEDULES_STATE || 'DISABLED' }}
           ALERT_EMAIL: ${{ vars.BATCH_ALERT_EMAIL }}
+          # 템플릿 기본값만 바꾸면 기존 스택은 이전 값을 유지하므로 항상 명시한다
+          IMAGE_TAG: ${{ vars.BATCH_IMAGE_TAG || '1.0.5-1' }}
         run: |
           extra=""
           [ "$MODE" = "preview" ] && extra="--no-execute-changeset"
@@ -64,10 +69,12 @@ jobs:
               SubnetIds="$SUBNET_IDS" \
               RdsSecurityGroupId="$RDS_SG_ID" \
               SchedulesState="$SCHEDULES_STATE" \
-              AlertEmail="$ALERT_EMAIL" | tee deploy.log
+              AlertEmail="$ALERT_EMAIL" \
+              BatchImageTag="$IMAGE_TAG" | tee deploy.log
 
       - name: change set summary
         if: ${{ github.event_name == 'pull_request' && vars.AWS_ROLE_ARN != '' }}
+        shell: bash
         run: |
           cs=$(grep -oE 'arn:aws:cloudformation:[^ ]+changeSet/[^ ]+' deploy.log | head -1 || true)
           {

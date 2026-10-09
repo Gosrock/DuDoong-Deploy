@@ -40,7 +40,7 @@ jobs:
   run:
     runs-on: ubuntu-latest
     environment: DuDoong-Infra
-    timeout-minutes: 60
+    timeout-minutes: 360
     steps:
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -95,10 +95,24 @@ jobs:
             if [ -z "$task" ] || [ "$task" = "None" ]; then echo "태스크를 시작하지 못함: $args"; exit 1; fi
             id=${task##*/}
             echo "실행: $args (task $id)"
-            aws ecs wait tasks-stopped --cluster "$cluster" --tasks "$task"
+            # aws ecs wait 는 10분이면 포기한다. 정산·메일 job 은 더 걸릴 수 있어 직접 기다린다 (최대 55분)
+            status=""
+            for i in $(seq 1 330); do
+              status=$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task" --query 'tasks[0].lastStatus' --output text)
+              [ "$status" = "STOPPED" ] && break
+              sleep 10
+            done
+            if [ "$status" != "STOPPED" ]; then
+              echo "::error::55분이 지나도 끝나지 않음 (task $id, 상태 $status). 태스크는 아직 돌고 있을 수 있으니 **다시 실행하지 말고** CloudWatch Logs 와 배치 이력 화면에서 끝났는지 확인"
+              echo "| \`$args\` | 확인 필요 (55분 초과, 재실행 금지) | \`batch/app/$id\` |" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
             code=$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task" --query "tasks[0].containers[?name=='app'].exitCode | [0]" --output text)
             reason=$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task" --query 'tasks[0].stoppedReason' --output text)
             echo "  exit code: $code / stopped: $reason"
             echo "| \`$args\` | \`$code\` | \`batch/app/$id\` |" >> "$GITHUB_STEP_SUMMARY"
-            if [ "$code" != "0" ]; then echo "실패해서 멈춤 (로그: CloudWatch Logs /dudoong/batch)"; exit 1; fi
+            if [ "$code" != "0" ]; then
+              echo "::error::실패해서 멈춤 (로그: CloudWatch Logs /dudoong/batch). 정산_전체를 다시 돌리면 앞서 성공한 job(메일·알림톡 포함)도 다시 실행되니, 실패한 job부터 개별로 실행"
+              exit 1
+            fi
           done < runs.txt

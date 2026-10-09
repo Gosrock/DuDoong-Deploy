@@ -63,13 +63,14 @@ Resources:
       ImageTagMutability: IMMUTABLE
       LifecyclePolicy:
         LifecyclePolicyText: |
-          {"rules":[{"rulePriority":1,"description":"최근 5개만 보관","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},"action":{"type":"expire"}}]}
+          {"rules":[{"rulePriority":1,"description":"태그 없는 이미지만 정리 (쓰는 태그는 지우지 않는다)","selection":{"tagStatus":"untagged","countType":"sinceImagePushed","countUnit":"days","countNumber":7},"action":{"type":"expire"}}]}
 
   Cluster:
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: dudoong-batch
-      CapacityProviders: [FARGATE]
+      # CapacityProviders 는 두지 않는다: RunTask 가 LaunchType FARGATE 를 쓰고,
+      # ECS 를 처음 쓰는 계정에서 서비스 연결 역할 전파 전에 붙이면 생성이 실패할 수 있다
 
   LogGroup:
     Type: AWS::Logs::LogGroup
@@ -146,14 +147,14 @@ Resources:
           EnvironmentFiles:
             - Type: s3
               Value: !Sub ${EnvBucket.Arn}/batch.env
-          # environment 는 env 파일보다 우선한다: Redis 는 같은 태스크의 사이드카
+          # environment 는 env 파일보다 우선한다: Redis 는 같은 태스크의 사이드카(비밀번호 없음).
+          # 1.0.5-1 의 Redisson 은 비밀번호 없이 붙으므로 지금 센터 redis 도 비밀번호가 없다 → 같은 조건.
+          # (빈 값은 Fargate 가 버리므로 REDIS_PASSWORD 는 덮어쓰지 않는다)
           Environment:
             - Name: REDIS_HOST
               Value: localhost
             - Name: REDIS_PORT
               Value: "6379"
-            - Name: REDIS_PASSWORD
-              Value: ""
             - Name: BATCH_ARGS
               Value: ""
           DependsOn:
@@ -206,6 +207,15 @@ Resources:
               - Effect: Allow
                 Action: iam:PassRole
                 Resource: !GetAtt ExecutionRole.Arn
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt SchedulerDeadLetterQueue.Arn
+
+  SchedulerDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: dudoong-batch-scheduler-dlq
+      MessageRetentionPeriod: 1209600
 
   # Jenkins "이벤트_만료처리" (H/30 19-22) 대체
   EventExpirationSchedule:
@@ -223,6 +233,9 @@ Resources:
         RoleArn: !GetAtt SchedulerRole.Arn
         RetryPolicy:
           MaximumRetryAttempts: 0
+        # 스케줄러가 태스크를 시작조차 못 하면(권한·서브넷·용량) 여기로 → 알람
+        DeadLetterConfig:
+          Arn: !GetAtt SchedulerDeadLetterQueue.Arn
         Input: !Sub
           - >-
             {"Cluster":"${Cluster}","TaskDefinition":"${TaskDefinition}","LaunchType":"FARGATE",
@@ -246,6 +259,9 @@ Resources:
         RoleArn: !GetAtt SchedulerRole.Arn
         RetryPolicy:
           MaximumRetryAttempts: 0
+        # 스케줄러가 태스크를 시작조차 못 하면(권한·서브넷·용량) 여기로 → 알람
+        DeadLetterConfig:
+          Arn: !GetAtt SchedulerDeadLetterQueue.Arn
         Input: !Sub
           - >-
             {"Cluster":"${Cluster}","TaskDefinition":"${TaskDefinition}","LaunchType":"FARGATE",
@@ -271,6 +287,14 @@ Resources:
               Service: events.amazonaws.com
             Action: sns:Publish
             Resource: !Ref AlertTopic
+          - Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref AlertTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
 
   AlertEmailSubscription:
     Type: AWS::SNS::Subscription
@@ -303,6 +327,46 @@ Resources:
               reason: $.detail.stoppedReason
               task: $.detail.taskArn
             InputTemplate: '"[두둥 배치 실패] <group> / <reason> / <task>"'
+
+  # 컨테이너가 시작조차 못 한 경우(이미지 pull 실패, env 파일 없음 등) — exitCode 가 없어 위 룰에 안 걸린다
+  TaskFailedToStartRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: dudoong-batch-failed-to-start
+      Description: dudoong-batch 태스크가 시작하지 못함
+      EventPattern:
+        source: [aws.ecs]
+        detail-type: [ECS Task State Change]
+        detail:
+          clusterArn: [!GetAtt Cluster.Arn]
+          lastStatus: [STOPPED]
+          stopCode: [TaskFailedToStart]
+      Targets:
+        - Id: sns
+          Arn: !Ref AlertTopic
+          InputTransformer:
+            InputPathsMap:
+              group: $.detail.group
+              reason: $.detail.stoppedReason
+            InputTemplate: '"[두둥 배치 시작 실패] <group> / <reason>"'
+
+  SchedulerDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: dudoong-batch-scheduler-failed
+      AlarmDescription: 스케줄러가 배치 태스크를 시작하지 못함 (DLQ 에 메시지)
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt SchedulerDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
 
 Outputs:
   EnvBucketName:

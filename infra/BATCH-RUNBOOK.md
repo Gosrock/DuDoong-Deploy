@@ -28,33 +28,43 @@
 ## 1. 준비 (1회)
 
 1. **OIDC 공급자**가 있어야 한다 → `infra/github-deploy-role.yml` 스택(Deploy #22)을 먼저 배포
-2. 배치용 역할 스택
+2. **ECS 서비스 연결 역할** (이 계정은 ECS를 처음 쓴다. 이미 있으면 "already exists" 오류 — 무시)
+   ```bash
+   aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com
+   ```
+3. 배치용 역할 스택
    ```bash
    aws cloudformation deploy --stack-name dudoong-github-batch-role \
      --template-file infra/github-batch-role.yml --capabilities CAPABILITY_NAMED_IAM
    aws cloudformation describe-stacks --stack-name dudoong-github-batch-role --query 'Stacks[0].Outputs'
    ```
-3. GitHub → Settings → Environments → **`DuDoong-Infra`** 만들고 Variables 등록
-   | 변수 | 값 |
-   |---|---|
-   | `AWS_ROLE_ARN` | 출력 `GitHubRoleArn` |
-   | `CFN_EXEC_ROLE_ARN` | 출력 `CfnExecutionRoleArn` |
-   | `BATCH_VPC_ID` | default VPC ID |
-   | `BATCH_SUBNET_IDS` | 퍼블릭 서브넷 2개 이상, 쉼표로 (예: 2a,2c) |
-   | `RDS_SECURITY_GROUP_ID` | RDS 보안그룹 (`dudoong-rds`) ID |
-   | `BATCH_SCHEDULES_STATE` | 처음엔 `DISABLED` |
-   | `BATCH_ALERT_EMAIL` | 실패 알림 받을 메일 (선택) |
-4. Actions **"Infra Deploy (batch)"** 수동 실행 → `dudoong-batch` 스택 생성
-   - 알림 메일을 넣었으면 SNS 구독 확인 메일의 링크를 누른다
-5. env 파일 올리기 (센터의 파일 그대로)
+4. GitHub 변수 등록 (Settings → Secrets and variables → Actions → **Variables**)
+   - **리포지토리 변수** (두 Environment가 같이 쓴다)
+     | 변수 | 값 |
+     |---|---|
+     | `CFN_EXEC_ROLE_ARN` | 출력 `CfnExecutionRoleArn` |
+     | `BATCH_VPC_ID` | default VPC ID |
+     | `BATCH_SUBNET_IDS` | 퍼블릭 서브넷 2개 이상, 쉼표로 (예: 2a,2c) |
+     | `RDS_SECURITY_GROUP_ID` | RDS 보안그룹 (`dudoong-rds`) ID |
+     | `BATCH_SCHEDULES_STATE` | 처음엔 `DISABLED` |
+     | `BATCH_ALERT_EMAIL` | 실패 알림 받을 메일 — **스케줄을 켜기 전에 반드시** |
+     | `BATCH_IMAGE_TAG` | `1.0.5-1` (이미지를 바꿀 때 이 값만 바꾼다) |
+   - **Environment `DuDoong-Infra`** (반영·수동 실행): 변수 `AWS_ROLE_ARN` = 출력 `GitHubRoleArn`
+     - 보호 규칙 **Deployment branches = `main` 만** — PR 브랜치에서 반영 역할을 못 쓰게
+   - **Environment `DuDoong-Infra-Preview`** (PR 미리보기): 변수 `AWS_ROLE_ARN` = 출력 `GitHubPreviewRoleArn` (변경 세트 실행 권한 없음)
+5. Actions **"Infra Deploy (batch)"** 수동 실행 (main) → `dudoong-batch` 스택 생성
+   - 실패하면 Actions가 빨간색으로 끝난다. 스택이 `ROLLBACK_COMPLETE` 면 콘솔에서 스택 삭제 → ECR `dudoong-batch` 저장소가 남아 있으면 같이 지우고 다시 실행
+   - SNS 구독 확인 메일의 링크를 누른다
+6. env 파일 올리기 (센터 파일에서 Redis 줄만 뺀다)
    ```bash
-   scp -i <센터 키> ubuntu@<센터>:/tmp/batch.env ./batch.env   # 센터에서 먼저: sudo cp /root/dudoong/.env.prod /tmp/batch.env && sudo chown ubuntu /tmp/batch.env
+   # 센터에서: sudo grep -vE '^REDIS_(HOST|PORT|PASSWORD)=' /root/dudoong/.env.prod > /tmp/batch.env && sudo chown ubuntu /tmp/batch.env
+   scp -i <센터 키> ubuntu@<센터>:/tmp/batch.env ./batch.env
+   grep -c '^PROFILE=prod$' ./batch.env        # 1 이어야 한다 (없으면 이미지 기본값 dev 로 뜬다)
    aws s3 cp ./batch.env s3://<출력 EnvBucketName>/batch.env --sse AES256
-   rm ./batch.env                                               # 센터 /tmp/batch.env 도 지운다
+   rm ./batch.env                                # 센터 /tmp/batch.env 도 지운다
    ```
-   - `PROFILE=prod` 가 들어 있어야 한다 (없으면 이미지 기본값 dev)
-   - `REDIS_HOST/PORT/PASSWORD` 는 태스크 정의가 덮어쓴다 (사이드카)
-6. Actions **"Batch Image Copy"** 실행 (tag `1.0.5-1`)
+   - Redis 는 같은 태스크의 사이드카(`localhost:6379`, 비밀번호 없음). 1.0.5-1 의 Redisson 은 비밀번호 없이 붙으므로 지금 센터 redis 와 같은 조건이다. env 파일에 `REDIS_PASSWORD` 가 남아 있으면 Lettuce 가 사이드카에 AUTH 를 보내 실패할 수 있어 위에서 뺀다
+7. Actions **"Batch Image Copy"** 실행 (tag `1.0.5-1`)
 
 ## 2. 확인 (스케줄 꺼진 상태)
 
@@ -69,8 +79,9 @@ Actions **"Batch Run (manual)"**
 같은 날 Jenkins와 Fargate가 둘 다 돌면 Slack 메시지가 두 번 온다. 전환은 한 번에:
 
 1. Jenkins에서 `이벤트_만료처리`, `유저일일통계정보-prod` **비활성화**
-2. `BATCH_SCHEDULES_STATE` = `ENABLED` → "Infra Deploy (batch)" 실행
-3. 그날 저녁 19:00~22:30, 21:30 실행을 Slack·`BATCH_JOB_EXECUTION` 으로 확인
+2. `BATCH_ALERT_EMAIL` 이 설정되고 구독 확인까지 된 것을 확인
+3. `BATCH_SCHEDULES_STATE` = `ENABLED` → "Infra Deploy (batch)" 실행
+4. 그날 저녁 19:00~22:30, 21:30 실행을 Slack·내부 어드민 "배치 이력"으로 확인
 
 ## 4. 관찰 후 센터 정리
 
@@ -86,6 +97,12 @@ Actions **"Batch Run (manual)"**
 
 ## 알아둘 것
 
-- 이미지는 2023-07 빌드(Java 시절 코드)를 그대로 쓴다. dev(Kotlin) 코드 batch 이미지로 바꾸는 건 별도 이슈 — Boot 3 배치 실행 설정 확인 후 `BatchImageTag` 만 바꾸는 PR
-- 실패 알림: `app` 컨테이너가 0이 아닌 코드로 끝나면 SNS 메일. 이미지 pull 실패처럼 컨테이너가 시작도 못 한 경우는 알림이 안 갈 수 있다 → 매일 Slack 메시지가 없으면 확인
+- 이미지는 2023-07 빌드(Java 시절 코드)를 그대로 쓴다. dev(Kotlin) 코드 batch 이미지로 바꾸는 건 별도 이슈 — Boot 3 배치 실행 설정과 **Spring Batch 5 메타데이터 스키마 마이그레이션**을 확인한 뒤 "Batch Image Copy" → 리포지토리 변수 `BATCH_IMAGE_TAG` 변경 → "Infra Deploy (batch)" (템플릿 기본값만 바꾸는 PR은 기존 스택에 반영되지 않는다)
+- 실패 알림 (SNS 메일, `BATCH_ALERT_EMAIL`)
+  - `app` 컨테이너가 0이 아닌 코드로 끝남
+  - 태스크가 시작조차 못 함 (이미지 pull 실패, env 파일 없음 등)
+  - 스케줄러가 태스크를 못 띄움 (권한·서브넷·용량 → DLQ 알람)
+- 수동 실행이 55분 넘게 안 끝나면 Actions 는 실패로 끝나지만 **태스크는 계속 돌 수 있다.** 다시 실행하지 말고 배치 이력 화면에서 확인. `정산_전체` 를 다시 돌리면 이미 성공한 메일·알림톡 job 도 다시 나간다 → 실패한 job부터 개별 실행
+- 한글 job 이름: 이미지의 JVM 이 `LANG` 없이도 UTF-8 로 인자를 읽는 것을 확인함 (`sun.jnu.encoding=UTF-8`)
+- ECR 은 태그 없는 이미지만 7일 뒤 정리한다 (쓰는 태그는 지우지 않음, 태그 변경 불가)
 - 태스크는 퍼블릭 서브넷 + 퍼블릭 IP(실행 중에만 과금)로 나간다. 들어오는 포트는 없다
