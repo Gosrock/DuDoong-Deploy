@@ -1,0 +1,75 @@
+name: Batch Run (manual)
+# Fargate 배치를 한 번 실행하고 끝날 때까지 기다린다 (Jenkins "Build with Parameters" 대체).
+# 퍼블릭 리포라 배치 로그는 여기 찍지 않는다 → CloudWatch Logs /dudoong/batch
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 배치 job
+        required: true
+        type: choice
+        options:
+          - 이벤트_자동만료
+          - 슬랙유저통계
+      date:
+        description: 슬랙유저통계 기준 날짜 yyyy-MM-dd (비우면 오늘, KST). 이미 성공한 날짜는 다시 돌지 않는다
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    environment: DuDoong-Infra
+    timeout-minutes: 20
+    steps:
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ap-northeast-2
+
+      - name: build batch args
+        env:
+          JOB: ${{ inputs.job }}
+          DATE: ${{ inputs.date }}
+        run: |
+          case "$JOB" in
+            이벤트_자동만료) args='--job.name=이벤트_자동만료 version=$RUN_ID' ;;
+            슬랙유저통계)
+              if [ -n "$DATE" ]; then
+                echo "$DATE" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { echo "날짜 형식은 yyyy-MM-dd"; exit 1; }
+                args="--job.name=슬랙유저통계 date=$DATE"
+              else
+                args='--job.name=슬랙유저통계 date=$TODAY'
+              fi ;;
+            *) echo "알 수 없는 job: $JOB"; exit 1 ;;
+          esac
+          echo "BATCH_ARGS=$args" >> "$GITHUB_ENV"
+          echo "batch args: $args"
+
+      - name: run task and wait
+        run: |
+          out() { aws cloudformation describe-stacks --stack-name dudoong-batch --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
+          cluster=$(out ClusterName); taskdef=$(out TaskDefinitionArn); sg=$(out TaskSecurityGroupId); subnets=$(out SubnetIds)
+          overrides=$(jq -nc --arg a "$BATCH_ARGS" '{containerOverrides:[{name:"app",environment:[{name:"BATCH_ARGS",value:$a}]}]}')
+          task=$(aws ecs run-task --cluster "$cluster" --task-definition "$taskdef" --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$sg],assignPublicIp=ENABLED}" \
+            --overrides "$overrides" --query 'tasks[0].taskArn' --output text)
+          if [ -z "$task" ] || [ "$task" = "None" ]; then echo "태스크를 시작하지 못함"; exit 1; fi
+          echo "task: ${task##*/}"
+          aws ecs wait tasks-stopped --cluster "$cluster" --tasks "$task"
+          code=$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task" --query "tasks[0].containers[?name=='app'].exitCode | [0]" --output text)
+          reason=$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task" --query 'tasks[0].stoppedReason' --output text)
+          echo "exit code: $code / stopped: $reason"
+          echo "로그: CloudWatch Logs /dudoong/batch, 스트림 batch/app/${task##*/}"
+          {
+            echo "### 배치 실행 결과"
+            echo "- job args: \`$BATCH_ARGS\`"
+            echo "- exit code: \`$code\`"
+            echo "- 로그 스트림: \`batch/app/${task##*/}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$code" = "0" ]

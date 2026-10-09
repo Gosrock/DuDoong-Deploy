@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+    # 인프라(CloudFormation)·배치 워크플로만 바뀐 머지로는 앱을 다시 배포하지 않는다
+    paths-ignore:
+      - infra/**
+      - .github/workflows/batch-*.yml
+      - .github/workflows/infra-*.yml
 
 jobs:
   deploy-staging:

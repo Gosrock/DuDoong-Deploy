@@ -1,0 +1,85 @@
+name: Infra Deploy (batch)
+# GitOps: infra/batch.yml 을 바꾸는 PR 에서는 변경 내용(변경 세트)만 보여 주고, main 머지 때 반영한다
+on:
+  pull_request:
+    paths:
+      - infra/batch.yml
+  push:
+    branches:
+      - main
+    paths:
+      - infra/batch.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: infra-batch
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: DuDoong-Infra
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      # AWS 설정(스택 dudoong-github-batch-role + Environment 변수) 전에는 건너뛴다
+      - name: check setup
+        if: ${{ vars.AWS_ROLE_ARN == '' }}
+        run: echo "::notice::DuDoong-Infra Environment 변수 AWS_ROLE_ARN 이 없어 건너뜀 (infra/github-batch-role.yml 먼저 배포)"
+
+      - name: configure aws credentials
+        if: ${{ vars.AWS_ROLE_ARN != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ap-northeast-2
+
+      # 스택 파라미터는 Environment 변수에 둔다 (퍼블릭 리포라 리소스 ID 를 파일에 쓰지 않음)
+      - name: deploy stack
+        if: ${{ vars.AWS_ROLE_ARN != '' }}
+        env:
+          MODE: ${{ github.event_name == 'pull_request' && 'preview' || 'apply' }}
+          CFN_EXEC_ROLE_ARN: ${{ vars.CFN_EXEC_ROLE_ARN }}
+          VPC_ID: ${{ vars.BATCH_VPC_ID }}
+          SUBNET_IDS: ${{ vars.BATCH_SUBNET_IDS }}
+          RDS_SG_ID: ${{ vars.RDS_SECURITY_GROUP_ID }}
+          SCHEDULES_STATE: ${{ vars.BATCH_SCHEDULES_STATE || 'DISABLED' }}
+          ALERT_EMAIL: ${{ vars.BATCH_ALERT_EMAIL }}
+        run: |
+          extra=""
+          [ "$MODE" = "preview" ] && extra="--no-execute-changeset"
+          aws cloudformation deploy \
+            --stack-name dudoong-batch \
+            --template-file infra/batch.yml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --role-arn "$CFN_EXEC_ROLE_ARN" \
+            --no-fail-on-empty-changeset $extra \
+            --parameter-overrides \
+              VpcId="$VPC_ID" \
+              SubnetIds="$SUBNET_IDS" \
+              RdsSecurityGroupId="$RDS_SG_ID" \
+              SchedulesState="$SCHEDULES_STATE" \
+              AlertEmail="$ALERT_EMAIL" | tee deploy.log
+
+      - name: change set summary
+        if: ${{ github.event_name == 'pull_request' && vars.AWS_ROLE_ARN != '' }}
+        run: |
+          cs=$(grep -oE 'arn:aws:cloudformation:[^ ]+changeSet/[^ ]+' deploy.log | head -1 || true)
+          {
+            echo "### dudoong-batch 변경 세트 (반영 전 미리보기)"
+            if [ -z "$cs" ]; then
+              echo "변경 없음"
+            else
+              echo '| 동작 | 리소스 | 타입 | 교체 |'
+              echo '|---|---|---|---|'
+              aws cloudformation describe-change-set --change-set-name "$cs" \
+                --query 'Changes[].ResourceChange.[Action,LogicalResourceId,ResourceType,Replacement]' --output text \
+                | awk -F'\t' '{printf "| %s | %s | %s | %s |\n", $1, $2, $3, $4}'
+              aws cloudformation delete-change-set --change-set-name "$cs"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
