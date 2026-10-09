@@ -61,9 +61,6 @@ services:
       - internal-admin
     restart: always
     image: water0641/dudoong-nginx:1.8.0
-    volumes:
-      # /internal-api 허용 IP 목록. 저장소 밖(rsync --delete 대상 밖)에 둔다
-      - /etc/dudoong/nginx:/etc/nginx/dudoong:ro
     environment:
       - TZ=Asia/Seoul
     logging:
