@@ -23,14 +23,19 @@ jobs:
           key: ${{ secrets.KEY }}
           script: mkdir -p ~/srv/ubuntu
 
+      # Docker Hub 를 거치지 않게 러너에 있는 rsync·ssh 를 직접 쓴다
+      # (burnett01/rsync-deployments 는 실행마다 Docker Hub 이미지를 받아 429 로 실패했다 — Deploy #41)
       - name: copy source via ssh key
-        uses: burnett01/rsync-deployments@4.1
-        with:
-          switches: -avzr --delete
-          remote_path: ~/srv/ubuntu/
-          remote_host: ${{ secrets.HOST }}
-          remote_user: ubuntu
-          remote_key: ${{ secrets.KEY }}
+        env:
+          SSH_KEY: ${{ secrets.KEY }}
+          TARGET_HOST: ${{ secrets.HOST }}
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/deploy_key"
+          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/deploy_key"
+          rsync -azr --delete \
+            -e "ssh -i $RUNNER_TEMP/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
+            ./ "ubuntu@$TARGET_HOST:~/srv/ubuntu/"
+          rm -f "$RUNNER_TEMP/deploy_key"
       - name: executing remote ssh commands using password
         uses: appleboy/ssh-action@v1
         with:
