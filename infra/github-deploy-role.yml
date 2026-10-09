@@ -3,18 +3,17 @@ Description: >
   DuDoong-Deploy GitHub Actions용 AWS 역할 (WorkBook EP09 2단계).
   deploy.yml 스테이징 job이 스테이징 EC2를 조회하고, 꺼져 있으면 켤 수만 있다.
 
-# 배포 (1회, 쓰기 권한 있는 계정으로):
+# 배포 (1회, 관리자 계정 — CloudShell). 먼저 infra/bootstrap-ssm.sh 로 /dudoong/infra/* 를 등록해 둔다:
 #   aws cloudformation deploy --stack-name dudoong-github-deploy-role \
-#     --template-file infra/github-deploy-role.yml --capabilities CAPABILITY_NAMED_IAM \
-#     --parameter-overrides StagingInstanceId=<스테이징 인스턴스 ID>
-# 계정에 GitHub OIDC 공급자가 이미 있으면 CreateOidcProvider=false 를 추가한다.
-# 출력의 RoleArn 을 GitHub Environment(DuDoong-Staging) 변수 AWS_ROLE_ARN 에,
-# 인스턴스 ID 를 STAGING_INSTANCE_ID 에 넣는다.
+#     --template-file infra/github-deploy-role.yml --capabilities CAPABILITY_NAMED_IAM
+# 계정에 GitHub OIDC 공급자가 이미 있으면 --parameter-overrides CreateOidcProvider=false 를 추가한다.
+# 워크플로는 역할 이름(dudoong-github-staging-deploy)과 리포지토리 secret AWS_ACCOUNT_ID 로 ARN 을 만든다.
 
 Parameters:
   StagingInstanceId:
-    Type: AWS::EC2::Instance::Id
-    Description: 스테이징 EC2 인스턴스 ID
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/staging-instance-id
+    Description: 스테이징 EC2 인스턴스 ID (SSM 에서 읽는다)
   CreateOidcProvider:
     Type: String
     AllowedValues: ["true", "false"]
@@ -79,8 +78,12 @@ Resources:
               - Effect: Allow
                 Action: ec2:StartInstances
                 Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${StagingInstanceId}
+              # 워크플로가 스테이징 인스턴스 ID 를 SSM 에서 읽는다
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/dudoong/infra/staging-instance-id
 
 Outputs:
   RoleArn:
-    Description: GitHub Environment(DuDoong-Staging) 변수 AWS_ROLE_ARN 에 넣는다
+    Description: 워크플로가 secrets.AWS_ACCOUNT_ID 와 역할 이름으로 만든다 (등록 불필요)
     Value: !GetAtt StagingDeployRole.Arn

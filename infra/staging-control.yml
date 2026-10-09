@@ -3,22 +3,21 @@ Description: >
   스테이징 서버 켜기/끄기 권한 + 매일 02:00 KST 자동 종료 (WorkBook EP09 3단계).
   내부 어드민(운영 백엔드)이 EC2 인스턴스 역할로 스테이징 1대만 조회·켜기·끄기 할 수 있다.
 
-# 배포 (1회, 쓰기 권한 있는 계정으로):
+# 배포 (관리자 계정 — CloudShell). 값은 모두 SSM(/dudoong/infra/*)에서 읽는다 → 파라미터 없이:
 #   aws cloudformation deploy --stack-name dudoong-staging-control \
-#     --template-file infra/staging-control.yml --capabilities CAPABILITY_NAMED_IAM \
-#     --parameter-overrides StagingInstanceId=<스테이징 인스턴스 ID> ProdInstanceId=<운영 인스턴스 ID>
-# InstanceRoleName 기본값은 운영 EC2 인스턴스 프로파일 이름과 같은 역할 이름을 가정한다.
-# 다르면 InstanceRoleName=<실제 역할 이름> 을 추가한다 (IAM 콘솔 → 인스턴스 프로파일에서 확인).
-# 운영 .env(GitHub Environment DuDoong-Production 시크릿 ENV_VARS)에 STAGING_INSTANCE_ID 를 추가해야 어드민 기능이 켜진다.
-# 순서: (1) github-deploy-role 스택 + DuDoong-Staging 변수 → (2) 이 스택 → (3) 운영 .env 에 STAGING_INSTANCE_ID
-#       → (4) 자동 종료 켜기: --parameter-overrides ... AutoStopState=ENABLED 로 다시 배포
+#     --template-file infra/staging-control.yml --capabilities CAPABILITY_NAMED_IAM
+# 자동 종료 켜기: SSM /dudoong/infra/staging-auto-stop-state 를 ENABLED 로 바꾼 뒤 같은 명령을 다시 실행.
+#   (스테이징을 끄면 퍼블릭 IP 가 바뀌므로, 배포 파이프라인 역할 스택을 먼저 만든 뒤에 켠다)
+# 운영 백엔드의 STAGING_INSTANCE_ID 는 운영 .env(SSM /dudoong/env/prod)에 넣는다.
 
 Parameters:
   StagingInstanceId:
-    Type: AWS::EC2::Instance::Id
-    Description: 스테이징 EC2 인스턴스 ID
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/staging-instance-id
+    Description: 스테이징 EC2 인스턴스 ID (SSM)
   ProdInstanceId:
-    Type: AWS::EC2::Instance::Id
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/prod-instance-id
     Description: >
       운영 EC2 인스턴스 ID. 운영·스테이징이 같은 인스턴스 역할을 써서,
       이 서버에서 나온 요청(ec2:SourceInstanceArn)에만 권한을 준다
@@ -31,12 +30,11 @@ Parameters:
     Default: cron(0 2 * * ? *)
     Description: 자동 종료 시각 (Asia/Seoul)
   AutoStopState:
-    Type: String
-    AllowedValues: [ENABLED, DISABLED]
-    Default: DISABLED
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/staging-auto-stop-state
     Description: >
-      자동 종료 켜기. 스테이징을 끄면 퍼블릭 IP가 바뀌므로, 배포 파이프라인이 IP를 조회하도록
-      DuDoong-Staging 변수(AWS_ROLE_ARN, STAGING_INSTANCE_ID)를 먼저 설정한 뒤 ENABLED 로 바꾼다
+      자동 종료 ENABLED/DISABLED (SSM). 스테이징을 끄면 퍼블릭 IP가 바뀌므로,
+      배포 파이프라인 역할 스택(github-deploy-role)을 먼저 만든 뒤 ENABLED 로 바꾼다
 
 Resources:
   # 운영 백엔드(인스턴스 역할)에 붙는 권한: 스테이징 1대만 켜기·끄기
@@ -58,6 +56,9 @@ Resources:
             Condition:
               ArnEquals:
                 ec2:SourceInstanceArn: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ProdInstanceId}
+              # IMDSv2 로 받은 자격 증명만 (백엔드 AWS SDK v2 는 IMDSv2 를 쓴다)
+              NumericGreaterThanEquals:
+                ec2:RoleDelivery: "2.0"
           - Effect: Allow
             Action:
               - ec2:StartInstances
@@ -66,6 +67,9 @@ Resources:
             Condition:
               ArnEquals:
                 ec2:SourceInstanceArn: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ProdInstanceId}
+              # IMDSv2 로 받은 자격 증명만 (백엔드 AWS SDK v2 는 IMDSv2 를 쓴다)
+              NumericGreaterThanEquals:
+                ec2:RoleDelivery: "2.0"
 
   # EventBridge Scheduler 실행 역할: 스테이징 끄기만
   AutoStopRole:

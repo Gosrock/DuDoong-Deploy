@@ -14,6 +14,10 @@ permissions:
   contents: read
   id-token: write # GitHub OIDC → AWS 역할 (스테이징 조회·켜기)
 
+# GitHub 에는 리포지토리 secret AWS_ACCOUNT_ID 하나만 둔다. 나머지 값은 AWS SSM (Deploy #28)
+#  - 스테이징 인스턴스 ID: SSM /dudoong/infra/staging-instance-id (워크플로 역할로 읽음)
+#  - 앱 .env: 서버가 자기 인스턴스 역할로 SSM /dudoong/env/<prod|staging> 을 직접 읽음 (scripts/fetch-env.sh)
+
 jobs:
   deploy-staging:
     name: Deploy(Staging)
@@ -23,28 +27,27 @@ jobs:
     concurrency:
       group: deploy-staging-server
       cancel-in-progress: false
-    # 역할 ARN·인스턴스 ID 는 secrets 로 (퍼블릭 리포 Actions 로그에 vars 는 그대로 찍힌다)
     env:
-      HAS_ROLE: ${{ secrets.AWS_ROLE_ARN != '' }}
+      HAS_ROLE: ${{ secrets.AWS_ACCOUNT_ID != '' }}
     steps:
       - name: checkout
         uses: actions/checkout@v4
 
       # 스테이징은 평소 꺼둔다 (WorkBook EP09). 꺼져 있으면 켜고, 바뀐 퍼블릭 IP를 조회한다.
-      # Environment secrets AWS_ROLE_ARN / STAGING_INSTANCE_ID 가 없으면 기존처럼 secrets.HOST 사용.
+      # secret AWS_ACCOUNT_ID 가 없으면 기존처럼 secrets.HOST 사용.
       - name: configure aws credentials
         if: ${{ env.HAS_ROLE == 'true' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/dudoong-github-staging-deploy
           aws-region: ap-northeast-2
           mask-aws-account-id: true
 
       - name: ensure staging is running
         if: ${{ env.HAS_ROLE == 'true' }}
-        env:
-          INSTANCE_ID: ${{ secrets.STAGING_INSTANCE_ID }}
         run: |
+          INSTANCE_ID=$(aws ssm get-parameter --name /dudoong/infra/staging-instance-id --query Parameter.Value --output text)
+          echo "::add-mask::$INSTANCE_ID"
           state() { aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text; }
           s=$(state); echo "staging state: $s"
           case "$s" in
@@ -65,6 +68,7 @@ jobs:
         if: ${{ env.HAS_ROLE != 'true' }}
         run: echo "STAGING_HOST=${{ secrets.HOST }}" >> "$GITHUB_ENV"
 
+      # 이관 기간용: SSM 에 값이 없을 때만 서버에서 이 .env 가 쓰인다 (scripts/fetch-env.sh)
       - name: create env file
         run: |
           touch .env
@@ -94,6 +98,7 @@ jobs:
           envs:
           script: |
             sh ~/srv/ubuntu/docker-install.sh
+            sh ~/srv/ubuntu/scripts/fetch-env.sh staging || exit 1
             echo "start docker-compose up: ubuntu"
             sudo docker-compose -v
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.staging.yml pull
@@ -134,6 +139,7 @@ jobs:
       - name: checkout
         uses: actions/checkout@v4
 
+      # 이관 기간용: SSM 에 값이 없을 때만 서버에서 이 .env 가 쓰인다 (scripts/fetch-env.sh)
       - name: create env file
         run: |
           touch .env
@@ -163,6 +169,7 @@ jobs:
           envs:
           script: |
             sh ~/srv/ubuntu/docker-install.sh
+            sh ~/srv/ubuntu/scripts/fetch-env.sh prod || exit 1
             echo "start docker-compose up: ubuntu"
             sudo docker-compose -v
             sudo docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml pull

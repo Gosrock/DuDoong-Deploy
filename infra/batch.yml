@@ -3,82 +3,37 @@ Description: >
   두둥 배치를 센터(Jenkins) 대신 ECS Fargate 예약 작업으로 실행한다 (WorkBook EP09 4단계, Deploy #25).
   실행할 때만 과금된다. 배치는 시작할 때 Redis 연결이 필요해 같은 태스크에 Redis 사이드카를 둔다.
 
-# 배포: Actions "Infra Deploy (batch)" (main 머지 시 자동) 또는 쓰기 권한 계정으로
-#   aws cloudformation deploy --stack-name dudoong-batch --template-file infra/batch.yml \
-#     --capabilities CAPABILITY_NAMED_IAM --parameter-overrides \
-#     VpcId=<VPC> SubnetIds=<서브넷1,서브넷2> RdsSecurityGroupId=<RDS 보안그룹> [SchedulesState=ENABLED]
-# 첫 배포 뒤: 출력의 EnvBucketName 에 env 파일을 batch.env 로 올리고, ECR 에 이미지를 복사한다 (README 런북).
+# 배포: Actions "Infra Deploy (batch)" (main 머지 시 자동). 값은 모두 SSM 에서 읽는다 (파라미터 없음):
+#   /dudoong/infra/vpc-id, batch-subnet-ids, rds-sg-id, alert-email, batch-schedules-state, batch-image-tag
+#   /dudoong/env/batch (SecureString — 센터 .env.prod)
+# 값을 바꾸려면 AWS 콘솔(Systems Manager → Parameter Store)에서 바꾸고 "Infra Deploy (batch)" 를 다시 실행한다.
 
 Parameters:
   VpcId:
-    Type: AWS::EC2::VPC::Id
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/vpc-id
   SubnetIds:
-    Type: List<AWS::EC2::Subnet::Id>
+    Type: AWS::SSM::Parameter::Value<List<String>>
+    Default: /dudoong/infra/batch-subnet-ids
     Description: 퍼블릭 서브넷 (NAT 없음 → 태스크에 퍼블릭 IP를 붙여 ECR·Slack 등에 나간다)
   RdsSecurityGroupId:
-    Type: AWS::EC2::SecurityGroup::Id
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/rds-sg-id
     Description: RDS 보안그룹. 배치 보안그룹에서 3306 접속을 허용하는 규칙을 이 스택이 추가한다
   BatchImageTag:
-    Type: String
-    Default: 1.0.5-1
-    Description: ECR dudoong-batch 이미지 태그 (지금 Jenkins와 같은 2023-07 빌드)
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/batch-image-tag
+    Description: ECR dudoong-batch 이미지 태그 (처음엔 Jenkins와 같은 1.0.5-1)
   SchedulesState:
-    Type: String
-    AllowedValues: [ENABLED, DISABLED]
-    Default: DISABLED
-    Description: 예약 실행 켜기. 수동 실행으로 확인한 뒤 Jenkins 작업을 끄고 ENABLED 로 바꾼다
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/batch-schedules-state
+    Description: 예약 실행 ENABLED/DISABLED. 수동 실행으로 확인한 뒤 Jenkins 작업을 끄고 ENABLED 로 바꾼다
   AlertEmail:
-    Type: String
-    Default: ""
-    Description: 배치 실패 알림 받을 이메일 (비우면 알림 구독 없음)
-
-Conditions:
-  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/alert-email
+    Description: 배치 실패 알림 받을 이메일
 
 Resources:
-  # env 파일(.env.prod 그대로)을 두는 비공개 버킷. 시크릿은 git에 넣지 않는다
-  EnvBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      VersioningConfiguration:
-        Status: Enabled
-      # 시크릿을 바꾼 뒤 옛 버전이 무기한 남지 않게
-      LifecycleConfiguration:
-        Rules:
-          - Id: expire-old-env-versions
-            Status: Enabled
-            NoncurrentVersionExpiration:
-              NoncurrentDays: 30
-
-  EnvBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref EnvBucket
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: DenyInsecureTransport
-            Effect: Deny
-            Principal: "*"
-            Action: s3:*
-            Resource:
-              - !GetAtt EnvBucket.Arn
-              - !Sub ${EnvBucket.Arn}/*
-            Condition:
-              Bool:
-                aws:SecureTransport: "false"
-
   Repository:
     Type: AWS::ECR::Repository
     DeletionPolicy: Retain
@@ -120,16 +75,20 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
       Policies:
-        - PolicyName: read-env-file
+        - PolicyName: read-batch-env
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              # ECS 가 태스크를 시작할 때 SSM 의 배치 .env 를 컨테이너에 넣는다
               - Effect: Allow
-                Action: s3:GetObject
-                Resource: !Sub ${EnvBucket.Arn}/batch.env
+                Action: ssm:GetParameters
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/dudoong/env/batch
               - Effect: Allow
-                Action: s3:GetBucketLocation
-                Resource: !GetAtt EnvBucket.Arn
+                Action: kms:Decrypt
+                Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
 
   TaskSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -165,23 +124,20 @@ Resources:
           Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/dudoong-batch:${BatchImageTag}
           Essential: true
           # 이미지 원래 ENTRYPOINT 와 같은 java 옵션. 실행마다 BATCH_ARGS 만 바꾼다.
-          # BATCH_ARGS 안의 자리표시자 $TODAY(KST yyyy-MM-dd), $RUN_ID(epoch 초)만 글자 그대로 바꾸고,
-          # 셸로 해석(eval)하지 않는다 → 인자에 명령이 섞여도 실행되지 않는다.
+          # 1) DOTENV(SSM /dudoong/env/batch, .env 내용 통째로)를 한 줄씩 읽어 export 한다.
+          #    docker --env-file 과 같은 규칙: KEY=VALUE, '#' 주석·빈 줄·'=' 없는 줄 무시, 앞 공백·CRLF 의 \r 제거,
+          #    값은 해석하지 않고 그대로. 셸 변수 이름이 될 수 없는 키(점·대시 포함)는 건너뛴다.
+          # 2) Redis 는 같은 태스크의 사이드카(비밀번호 없음)로 덮어쓴다.
+          # 3) BATCH_ARGS 안의 자리표시자 $TODAY(KST yyyy-MM-dd), $RUN_ID(epoch 초)만 글자 그대로 바꾸고
+          #    셸로 해석(eval)하지 않는다 → 인자에 명령이 섞여도 실행되지 않는다.
           # 이미지에 시간대 파일이 없어 POSIX 표기 KST-9 를 쓴다
           EntryPoint: ["sh", "-c"]
           Command:
-            - 'set -f; TODAY=$(TZ=KST-9 date +%F); RUN_ID=$(date +%s); set -- $(printf "%s" "$BATCH_ARGS" | sed -e "s/\$TODAY/$TODAY/g" -e "s/\$RUN_ID/$RUN_ID/g"); exec java -Dspring.profiles.active="$PROFILE" -Djava.security.egd=file:/dev/./urandom -Duser.timezone=Asia/Seoul -jar /app.jar "$@"'
-          EnvironmentFiles:
-            - Type: s3
-              Value: !Sub ${EnvBucket.Arn}/batch.env
-          # environment 는 env 파일보다 우선한다: Redis 는 같은 태스크의 사이드카(비밀번호 없음).
-          # 1.0.5-1 의 Redisson 은 비밀번호 없이 붙으므로 지금 센터 redis 도 비밀번호가 없다 → 같은 조건.
-          # (빈 값은 Fargate 가 버리므로 REDIS_PASSWORD 는 덮어쓰지 않는다)
+            - 'set -f; printf "%s\n" "$DOTENV" > /tmp/.env; unset DOTENV; cr=$(printf "\r"); while IFS= read -r line || [ -n "$line" ]; do line=${line%"$cr"}; line=${line#"${line%%[![:space:]]*}"}; case "$line" in ""|"#"*) continue ;; *=*) ;; *) continue ;; esac; key=${line%%=*}; case "$key" in ""|*[!A-Za-z0-9_]*) continue ;; esac; export "$key=${line#*=}"; done < /tmp/.env; rm -f /tmp/.env; export REDIS_HOST=localhost REDIS_PORT=6379; unset REDIS_PASSWORD; TODAY=$(TZ=KST-9 date +%F); RUN_ID=$(date +%s); set -- $(printf "%s" "$BATCH_ARGS" | sed -e "s/\$TODAY/$TODAY/g" -e "s/\$RUN_ID/$RUN_ID/g"); exec java -Dspring.profiles.active="$PROFILE" -Djava.security.egd=file:/dev/./urandom -Duser.timezone=Asia/Seoul -jar /app.jar "$@"'
+          Secrets:
+            - Name: DOTENV
+              ValueFrom: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/dudoong/env/batch
           Environment:
-            - Name: REDIS_HOST
-              Value: localhost
-            - Name: REDIS_PORT
-              Value: "6379"
             - Name: BATCH_ARGS
               Value: ""
           DependsOn:
@@ -331,7 +287,6 @@ Resources:
 
   AlertEmailSubscription:
     Type: AWS::SNS::Subscription
-    Condition: HasAlertEmail
     Properties:
       TopicArn: !Ref AlertTopic
       Protocol: email
@@ -402,9 +357,6 @@ Resources:
       AlarmActions: [!Ref AlertTopic]
 
 Outputs:
-  EnvBucketName:
-    Description: env 파일을 batch.env 로 올릴 버킷
-    Value: !Ref EnvBucket
   RepositoryUri:
     Value: !GetAtt Repository.RepositoryUri
   ClusterName:
