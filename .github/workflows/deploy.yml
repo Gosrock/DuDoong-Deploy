@@ -9,6 +9,7 @@ on:
       - infra/**
       - .github/workflows/batch-*.yml
       - .github/workflows/infra-*.yml
+      - .github/workflows/staging-power.yml
 
 permissions:
   contents: read

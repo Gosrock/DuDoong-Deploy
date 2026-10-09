@@ -75,8 +75,11 @@ Resources:
                   - ec2:DescribeInstances
                   - ec2:DescribeInstanceStatus
                 Resource: "*"
+              # 켜기: 배포·Staging Power 워크플로 / 끄기: Staging Power 워크플로 (스테이징 한 대만)
               - Effect: Allow
-                Action: ec2:StartInstances
+                Action:
+                  - ec2:StartInstances
+                  - ec2:StopInstances
                 Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${StagingInstanceId}
               # 워크플로가 스테이징 인스턴스 ID 를 SSM 에서 읽는다
               - Effect: Allow

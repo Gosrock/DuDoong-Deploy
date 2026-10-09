@@ -73,5 +73,6 @@ rm -f ~/prod.env ~/staging.env ~/batch.env && ls ~/*.env 2>/dev/null || echo "�
 - 확인되면 GitHub Environment `DuDoong-Staging`·`DuDoong-Production` 의 `ENV_VARS` secret 을 지운다 (그 전까지는 SSM 이 없을 때 대신 쓰인다)
 - 스테이징 자동 종료 켜기: SSM `/dudoong/infra/staging-auto-stop-state` = `ENABLED` (대문자) → `cf dudoong-staging-control staging-control.yml` 다시 실행
 - SSM 값만 바꾸면 자동 반영되지 않는다: 앱 `.env` 는 다음 배포 때, 배치 값은 Actions "Infra Deploy (batch)" 수동 실행, 그 밖의 스택은 `cf ...` 다시 실행
+- 스테이징 수동 켜기·끄기: Actions → "Staging Power" (status / start / stop). 켜기는 서버만 켜고, 새 코드 반영은 Deployment
 - 배치: `infra/BATCH-RUNBOOK.md`
 - 내부 어드민 스테이징 버튼: 운영 .env(SSM `/dudoong/env/prod`)에 `STAGING_INSTANCE_ID=<스테이징 인스턴스 ID>` 줄을 추가하고 백엔드 새 버전 배포 (dev → v2 DDL 먼저)
