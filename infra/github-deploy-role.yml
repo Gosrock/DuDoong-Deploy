@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  DuDoong-Deploy GitHub Actions용 AWS 역할 (WorkBook EP09 2단계).
+  deploy.yml 스테이징 job이 스테이징 EC2를 조회하고, 꺼져 있으면 켤 수만 있다.
+
+# 배포 (1회, 쓰기 권한 있는 계정으로):
+#   aws cloudformation deploy --stack-name dudoong-github-deploy-role \
+#     --template-file infra/github-deploy-role.yml --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides StagingInstanceId=<스테이징 인스턴스 ID>
+# 계정에 GitHub OIDC 공급자가 이미 있으면 CreateOidcProvider=false 를 추가한다.
+# 출력의 RoleArn 을 GitHub Environment(DuDoong-Staging) 변수 AWS_ROLE_ARN 에,
+# 인스턴스 ID 를 STAGING_INSTANCE_ID 에 넣는다.
+
+Parameters:
+  StagingInstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: 스테이징 EC2 인스턴스 ID
+  CreateOidcProvider:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: GitHub OIDC 공급자를 이 스택에서 만들지 (계정에 이미 있으면 false)
+  GitHubRepo:
+    Type: String
+    Default: Gosrock/DuDoong-Deploy
+  GitHubEnvironment:
+    Type: String
+    Default: DuDoong-Staging
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOidcProvider, "true"]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  StagingDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dudoong-github-staging-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateProvider
+                - !Ref GitHubOidcProvider
+                - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # 이 리포의 DuDoong-Staging Environment job만 맡을 수 있다
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:${GitHubEnvironment}
+      Policies:
+        - PolicyName: staging-ensure-running
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Describe 계열은 리소스 단위로 제한할 수 없다
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                Resource: "*"
+              - Effect: Allow
+                Action: ec2:StartInstances
+                Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${StagingInstanceId}
+
+Outputs:
+  RoleArn:
+    Description: GitHub Environment(DuDoong-Staging) 변수 AWS_ROLE_ARN 에 넣는다
+    Value: !GetAtt StagingDeployRole.Arn
