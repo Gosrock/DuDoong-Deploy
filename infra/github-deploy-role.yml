@@ -25,6 +25,12 @@ Parameters:
   GitHubEnvironment:
     Type: String
     Default: DuDoong-Staging
+  ProdInstanceId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /dudoong/infra/prod-instance-id
+  ProdGitHubEnvironment:
+    Type: String
+    Default: DuDoong-Production
 
 Conditions:
   CreateProvider: !Equals [!Ref CreateOidcProvider, "true"]
@@ -85,6 +91,56 @@ Resources:
               - Effect: Allow
                 Action: ssm:GetParameter
                 Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/dudoong/infra/staging-instance-id
+              # 배포: SSH 대신 SSM Run Command (Deploy #50). 스테이징 인스턴스 한 대에 셸 스크립트 문서로만
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${StagingInstanceId}
+                  - !Sub arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript
+              - Effect: Allow
+                Action:
+                  - ssm:GetCommandInvocation
+                  - ssm:ListCommandInvocations
+                Resource: "*"
+
+  # 운영 배포 (Deploy #50): DuDoong-Production Environment(승인자 + main 만) job 만 맡는다. 운영 인스턴스 한 대에 SSM 명령만
+  ProdDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dudoong-github-prod-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateProvider
+                - !Ref GitHubOidcProvider
+                - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:environment:${ProdGitHubEnvironment}
+      Policies:
+        - PolicyName: prod-deploy-via-ssm
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/dudoong/infra/prod-instance-id
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ProdInstanceId}
+                  - !Sub arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript
+              - Effect: Allow
+                Action:
+                  - ssm:GetCommandInvocation
+                  - ssm:ListCommandInvocations
+                Resource: "*"
 
 Outputs:
   RoleArn:

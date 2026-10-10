@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  운영·스테이징 서버의 SSM 에이전트 권한 (Deploy #50). GitHub 배포가 SSH 대신 SSM Run Command 를 쓴다.
+  AWS 관리형 AmazonSSMManagedInstanceCore 는 ssm:GetParameter(s) 를 모든 파라미터에 허용해서
+  "서버는 자기 .env 만 읽기"(server-env-access.yml) 분리가 깨진다 → 에이전트에 필요한 권한만 따로 준다.
+
+# 배포 (관리자 계정):
+#   aws cloudformation deploy --stack-name dudoong-server-ssm-agent \
+#     --template-file infra/server-ssm-agent.yml --capabilities CAPABILITY_NAMED_IAM
+
+Parameters:
+  InstanceRoleName:
+    Type: String
+    Default: ec2-docker-log-write-iam
+    Description: 운영·스테이징 EC2 인스턴스 역할 이름
+
+Resources:
+  SsmAgentPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: dudoong-server-ssm-agent
+      Description: SSM 에이전트 등록·Run Command·Session Manager 채널 (파라미터 읽기 없음)
+      Roles:
+        - !Ref InstanceRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # 에이전트 등록·상태 보고 (리소스 단위로 제한할 수 없다)
+          - Sid: AgentCore
+            Effect: Allow
+            Action:
+              - ssm:UpdateInstanceInformation
+              - ssm:ListInstanceAssociations
+              - ssm:DescribeAssociation
+              - ssm:UpdateInstanceAssociationStatus
+              - ssm:ListAssociations
+              - ssm:GetDocument
+              - ssm:DescribeDocument
+            Resource: "*"
+          # Run Command·Session Manager 메시지 채널
+          - Sid: MessageChannels
+            Effect: Allow
+            Action:
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+              - ec2messages:AcknowledgeMessage
+              - ec2messages:DeleteMessage
+              - ec2messages:FailMessage
+              - ec2messages:GetEndpoint
+              - ec2messages:GetMessages
+              - ec2messages:SendReply
+            Resource: "*"
+
+Outputs:
+  PolicyArn:
+    Value: !Ref SsmAgentPolicy
