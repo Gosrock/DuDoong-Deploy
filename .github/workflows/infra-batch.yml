@@ -30,6 +30,8 @@ env:
     BatchImageTag=/dudoong/infra/batch-image-tag
     SchedulesState=/dudoong/infra/batch-schedules-state
     AlertEmail=/dudoong/infra/alert-email
+  # 실패 로그를 보여 줄 때 가리는 값 (퍼블릭 리포): 계정 ID, 보안 그룹·서브넷·VPC ID, 이메일 (Deploy #48)
+  MASK_SED: 's/[0-9]{12}/***/g; s/(sg|subnet|vpc)-[0-9a-f]{8,17}/\1-***/g; s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/***@***/g'
 
 jobs:
   # PR: 미리보기 전용 역할 (변경 세트를 만들고 보고 지울 수만 있다, 실행 권한 없음)
@@ -69,7 +71,7 @@ jobs:
             --no-fail-on-empty-changeset --no-execute-changeset \
             --parameter-overrides $SSM_PARAMS \
             > deploy.log 2>&1 \
-            || { tail -5 deploy.log | sed -E 's/[0-9]{12}/***/g'; exit 1; }
+            || { tail -5 deploy.log | sed -E "$MASK_SED"; exit 1; }
 
       - name: change set summary
         if: ${{ env.HAS_ROLE == 'true' }}
@@ -115,7 +117,7 @@ jobs:
 
       - name: deploy stack
         if: ${{ env.HAS_ROLE == 'true' }}
-        # 실패하면 로그 마지막 몇 줄만 계정 ID 를 가려 보여 준다
+        # 실패하면 로그 마지막 몇 줄만 계정 ID·리소스 ID·이메일을 가려 보여 준다 (MASK_SED)
         shell: bash
         env:
           ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -129,5 +131,5 @@ jobs:
             --no-fail-on-empty-changeset \
             --parameter-overrides $SSM_PARAMS \
             > deploy.log 2>&1 \
-            || { tail -5 deploy.log | sed -E 's/[0-9]{12}/***/g'; exit 1; }
+            || { tail -5 deploy.log | sed -E "$MASK_SED"; exit 1; }
           echo "반영 완료"
