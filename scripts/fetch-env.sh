@@ -5,6 +5,8 @@
 # 서버에 AWS CLI 가 없어서 공식 이미지를 잠깐 띄워 쓴다. 값은 화면에 출력하지 않는다.
 # 읽지 못하면(없음·권한·네트워크 등) 옛 값으로 조용히 뜨지 않게 배포를 멈춘다. GitHub ENV_VARS 예비 경로는 없앴다 (Deploy #41).
 set -eu
+# 만드는 파일(.env.ssm·.env·오류 로그)이 처음부터 본인만 읽게 (Deploy #48)
+umask 077
 
 NAME="$1"
 DIR="$HOME/srv/ubuntu"

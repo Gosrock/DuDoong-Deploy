@@ -4,6 +4,8 @@ services:
     restart: unless-stopped
     image: "redis:alpine"
     network_mode: "host"
+    # 서버 안(백엔드 REDIS_HOST=localhost)에서만 붙게 루프백에만 연다 (Deploy #48). ::1 은 IPv6 가 없어도 뜨게 "-" 로 선택 바인드
+    command: redis-server --bind 127.0.0.1 -::1 --protected-mode yes
   backend:
     restart: unless-stopped
     image: water0641/dudoong-api:2.2.5
@@ -60,7 +62,7 @@ services:
       - admin
       - internal-admin
     restart: always
-    image: water0641/dudoong-nginx:1.9.1
+    image: water0641/dudoong-nginx:1.9.2
     # HTTPS 인증서 (scripts/tls-cert.sh 가 배포 때·매일 갱신, Deploy #37·#39)
     volumes:
       - /home/ubuntu/tls/certs:/etc/nginx/certs:ro
