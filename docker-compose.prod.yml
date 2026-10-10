@@ -43,7 +43,7 @@ services:
       - TZ=Asia/Seoul
   internal-admin:
     restart: unless-stopped
-    image: water0641/dudoong-internal-admin:0.5.0
+    image: water0641/dudoong-internal-admin:0.7.0
     container_name: internal-admin
     network_mode: "host"
     environment:
