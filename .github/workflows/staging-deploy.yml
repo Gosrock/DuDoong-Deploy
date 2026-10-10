@@ -1,5 +1,5 @@
 name: Staging Deploy
-# 스테이징 배포 단계 (공용). Deployment(main 머지)와 Staging Power(start) 가 같이 쓴다 — Deploy #41
+# 스테이징 배포 단계 (공용, SSH 없이 SSM). Deployment(main 머지)와 Staging Power(start) 가 같이 쓴다 — Deploy #41
 # 스테이징이 켜져 있을 때만 배포한다. 꺼져 있으면 건너뛴다 (스테이징을 켜지 않는다).
 on:
   workflow_call:
@@ -44,72 +44,9 @@ jobs:
             echo "SKIP=true" >> "$GITHUB_ENV"
             exit 0
           fi
-          aws ec2 wait instance-status-ok --instance-ids "$INSTANCE_ID"
-          ip=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
-          if [ -z "$ip" ] || [ "$ip" = "None" ]; then echo "no public ip"; exit 1; fi
-          echo "::add-mask::$ip"
-          echo "STAGING_HOST=$ip" >> "$GITHUB_ENV"
+          echo "INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
 
-      - name: create remote directory
+      # SSH 대신 SSM Run Command (Deploy #50): 서버가 이 커밋을 GitHub 에서 받아 scripts/remote-deploy.sh 실행
+      - name: deploy via SSM
         if: ${{ env.SKIP != 'true' }}
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ env.STAGING_HOST }}
-          username: ubuntu
-          key: ${{ secrets.KEY }}
-          script: mkdir -p ~/srv/ubuntu
-
-      # Docker Hub 를 거치지 않게 러너에 있는 rsync·ssh 를 직접 쓴다
-      # (burnett01/rsync-deployments 는 실행마다 Docker Hub 이미지를 받아 429 로 실패했다 — Deploy #41)
-      - name: copy source via ssh key
-        if: ${{ env.SKIP != 'true' }}
-        env:
-          SSH_KEY: ${{ secrets.KEY }}
-          TARGET_HOST: ${{ env.STAGING_HOST }}
-        run: |
-          install -m 600 /dev/null "$RUNNER_TEMP/deploy_key"
-          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/deploy_key"
-          rsync -azr --delete \
-            -e "ssh -i $RUNNER_TEMP/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
-            ./ "ubuntu@$TARGET_HOST:~/srv/ubuntu/"
-          rm -f "$RUNNER_TEMP/deploy_key"
-      - name: executing remote ssh commands using password
-        if: ${{ env.SKIP != 'true' }}
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ env.STAGING_HOST }}
-          username: ubuntu
-          key: ${{ secrets.KEY }}
-          envs:
-          script: |
-            sh ~/srv/ubuntu/docker-install.sh
-            sh ~/srv/ubuntu/scripts/fetch-env.sh staging || exit 1
-            sh ~/srv/ubuntu/scripts/tls-cert.sh staging || exit 1
-            echo "start docker-compose up: ubuntu"
-            sudo docker-compose -v
-            sudo docker-compose -f ~/srv/ubuntu/docker-compose.staging.yml pull
-            sudo docker-compose -f ~/srv/ubuntu/docker-compose.staging.yml --env-file ~/srv/ubuntu/.env up --build -d
-            echo "prune images"
-            sudo docker system prune --all -f
-
-      # 스테이징 앱이 실제로 떴는지 확인한다. 실패하면 운영 배포(needs)로 넘어가지 않는다.
-      - name: health check
-        if: ${{ env.SKIP != 'true' }}
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ env.STAGING_HOST }}
-          username: ubuntu
-          key: ${{ secrets.KEY }}
-          command_timeout: 15m
-          # 컨테이너 6개가 뜨는 데 시간이 걸린다 → 최대 10분 기다린다
-          script: |
-            for i in $(seq 1 60); do
-              code=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' http://localhost/api/v1/examples/health || true)
-              echo "try $i: $code"
-              [ "$code" = "200" ] && exit 0
-              sleep 10
-            done
-            echo "staging health check failed"
-            sudo docker ps --format '{{.Names}}\t{{.Status}}'
-            exit 1
-
+        run: bash scripts/ssm-deploy.sh "$INSTANCE_ID" staging "$GITHUB_SHA"

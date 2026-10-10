@@ -2,6 +2,10 @@ name: Deployment-live
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write # GitHub OIDC → AWS 역할 (SSM 배포)
+
 jobs:
   deploy-production:
     name: Deploy(Production)
@@ -15,41 +19,16 @@ jobs:
       - name: checkout
         uses: actions/checkout@v4
 
-      - name: create remote directory
-        uses: appleboy/ssh-action@v1
+      # SSH 대신 SSM Run Command (Deploy #50). 이 역할은 DuDoong-Production(승인자 + main 만) job 만 맡는다
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          host: ${{ secrets.HOST }}
-          username: ubuntu
-          key: ${{ secrets.KEY }}
-          script: mkdir -p ~/srv/ubuntu
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/dudoong-github-prod-deploy
+          aws-region: ap-northeast-2
+          mask-aws-account-id: true
 
-      # Docker Hub 를 거치지 않게 러너에 있는 rsync·ssh 를 직접 쓴다
-      # (burnett01/rsync-deployments 는 실행마다 Docker Hub 이미지를 받아 429 로 실패했다 — Deploy #41)
-      - name: copy source via ssh key
-        env:
-          SSH_KEY: ${{ secrets.KEY }}
-          TARGET_HOST: ${{ secrets.HOST }}
+      - name: deploy via SSM
         run: |
-          install -m 600 /dev/null "$RUNNER_TEMP/deploy_key"
-          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/deploy_key"
-          rsync -azr --delete \
-            -e "ssh -i $RUNNER_TEMP/deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
-            ./ "ubuntu@$TARGET_HOST:~/srv/ubuntu/"
-          rm -f "$RUNNER_TEMP/deploy_key"
-      - name: executing remote ssh commands using password
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.HOST }}
-          username: ubuntu
-          key: ${{ secrets.KEY }}
-          envs:
-          script: |
-            sh ~/srv/ubuntu/docker-install.sh
-            sh ~/srv/ubuntu/scripts/fetch-env.sh prod || exit 1
-            sh ~/srv/ubuntu/scripts/tls-cert.sh prod || exit 1
-            echo "start docker-compose up: ubuntu"
-            sudo docker-compose -v
-            sudo docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml pull
-            sudo docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml --env-file ~/srv/ubuntu/.env up --build -d
-            echo "prune images"
-            sudo docker system prune --all -f
+          INSTANCE_ID=$(aws ssm get-parameter --name /dudoong/infra/prod-instance-id --query Parameter.Value --output text)
+          echo "::add-mask::$INSTANCE_ID"
+          bash scripts/ssm-deploy.sh "$INSTANCE_ID" prod "$GITHUB_SHA"
