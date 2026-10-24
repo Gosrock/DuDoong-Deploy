@@ -103,4 +103,4 @@ cf dudoong-ecr ecr.yml   # 저장소 5개 + 서버 pull 정책 + 리포별 push 
 - 버전 태그는 덮어쓸 수 없어 **먼저 올린 이미지가 그 버전이 된다** → 각 리포 Settings → Rules 에 태그 ruleset (`Api-v*`·`Batch-v*`·`AdminFront-v*`·`Nginx-v*`·`Ticket-v*`·`Admin-v*` 생성은 관리자만)
 - 서버에서 compose 를 직접 다룰 때는 레지스트리 값을 같이 넘긴다 (없으면 compose 가 바로 실패):
   `sudo env ECR_REGISTRY=$(sh ~/srv/ubuntu/scripts/ecr-login.sh) docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml logs -f backend`
-- 배치는 Backend 가 ECR `dudoong-batch` 에 바로 올린다 (Backend #825). `Batch Image Copy` 는 그 전 버전용
+- 배치는 Backend 가 ECR `dudoong-batch` 에 바로 올린다 (Backend #825)

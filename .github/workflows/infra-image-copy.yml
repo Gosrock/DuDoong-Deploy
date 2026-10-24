@@ -2,7 +2,6 @@ name: Image Copy (Docker Hub → ECR)
 # 운영 이미지를 ECR 비공개 저장소로 복사한다 (Deploy #59). 멀티 아키(amd64+arm64) 목록을 그대로 옮긴다.
 # - 처음 이전: 비워 두고 실행하면 compose 두 파일이 쓰는 태그를 모두 복사
 # - 과도기: 아직 Docker Hub 에만 올리는 리포(Front #344)의 새 버전을 배포 전에 복사
-# 배치 이미지(dudoong-batch)는 batch-image.yml 이 따로 복사한다.
 on:
   workflow_dispatch:
     inputs:

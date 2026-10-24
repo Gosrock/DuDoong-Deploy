@@ -33,7 +33,7 @@
 1. Actions **"Infra Deploy (batch)"** 수동 실행 (main) → `dudoong-batch` 스택 생성
    - 실패하면 Actions 가 빨간색으로 끝난다. 스택이 `ROLLBACK_COMPLETE` 면 콘솔에서 스택 삭제 → ECR `dudoong-batch` 저장소가 남아 있으면 같이 지우고 다시 실행
    - SNS 구독 확인 메일의 링크를 누른다 (`/dudoong/infra/alert-email`)
-2. Actions **"Batch Image Copy"** 실행 (tag `1.0.5-1`)
+2. (이미 끝남) ECR `dudoong-batch:1.0.5-1` 은 처음 이전 때 Docker Hub 에서 복사해 두었다. Docker Hub 저장소는 Deploy #59 로 삭제
 
 - 배치 env 는 SSM `/dudoong/env/batch` 를 ECS 가 태스크에 넣는다. 진입 스크립트가 `docker --env-file` 과 같은 규칙으로 읽는다(값을 해석하지 않음 — 실제 이미지로 비교 확인). Redis 는 사이드카(`localhost:6379`, 비밀번호 없음)로 덮어쓴다
 - 배치 반영 역할은 **GitHub Environment `DuDoong-Infra`(필수 승인자 + main 만) 승인을 받은 job 만** 맡을 수 있고, PR 은 실행 권한 없는 미리보기 역할만 맡는다. **콘솔에서 변경 세트를 직접 실행(Execute)하지 않는다**
@@ -69,7 +69,7 @@ Actions **"Batch Run (manual)"**
 
 ## 알아둘 것
 
-- 이미지는 2023-07 빌드(Java 시절 코드)를 그대로 쓴다. dev(Kotlin) 코드 batch 이미지로 바꾸는 건 별도 이슈 — Boot 3 배치 실행 설정과 **Spring Batch 5 메타데이터 스키마 마이그레이션**을 확인한 뒤 "Batch Image Copy" → SSM `/dudoong/infra/batch-image-tag` 변경 → "Infra Deploy (batch)" (템플릿 기본값만 바꾸는 PR은 기존 스택에 반영되지 않는다)
+- 이미지는 2023-07 빌드(Java 시절 코드)를 그대로 쓴다. dev(Kotlin) 코드 batch 이미지로 바꾸는 건 별도 이슈 — Boot 3 배치 실행 설정과 **Spring Batch 5 메타데이터 스키마 마이그레이션**을 확인한 뒤 Backend `Batch-vX.Y.Z` 태그(ECR `dudoong-batch:X.Y.Z` 로 바로 푸시, Backend #825) → SSM `/dudoong/infra/batch-image-tag` 변경 → "Infra Deploy (batch)" (템플릿 기본값만 바꾸는 PR은 기존 스택에 반영되지 않는다)
 - 실패 알림 (SNS 메일, SSM `/dudoong/infra/alert-email`)
   - `app` 컨테이너가 0이 아닌 코드로 끝남
   - 태스크가 시작조차 못 함 (이미지 pull 실패, env 파일 없음 등)
