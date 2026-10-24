@@ -22,9 +22,12 @@ sh "$DIR/docker-install.sh"
 sh "$DIR/scripts/fetch-env.sh" "$NAME"
 sh "$DIR/scripts/tls-cert.sh" "$NAME"
 
+# 운영 이미지는 ECR 비공개 저장소에서 받는다 (Deploy #59). compose 의 ${ECR_REGISTRY} 로 넘긴다
+REGISTRY=$(sh "$DIR/scripts/ecr-login.sh")
+
 echo "== docker-compose up"
-sudo docker-compose -f "$DIR/$COMPOSE" pull -q
-sudo docker-compose -f "$DIR/$COMPOSE" --env-file "$DIR/.env" up -d
+sudo env ECR_REGISTRY="$REGISTRY" docker-compose -f "$DIR/$COMPOSE" pull -q
+sudo env ECR_REGISTRY="$REGISTRY" docker-compose -f "$DIR/$COMPOSE" --env-file "$DIR/.env" up -d
 sudo docker system prune --all -f > /dev/null
 
 echo "== 헬스체크 (최대 10분)"
