@@ -8,7 +8,7 @@ services:
     command: redis-server --bind 127.0.0.1 -::1 --protected-mode yes
   backend:
     restart: unless-stopped
-    image: water0641/dudoong-api:2.3.3
+    image: "${ECR_REGISTRY:?}/dudoong-api:2.3.3"
     container_name: backend
     env_file:
       - .env
@@ -23,7 +23,7 @@ services:
         awslogs-stream: "backend"
   front:
     restart: unless-stopped
-    image: david0218/dudoong-ticket:dev
+    image: "${ECR_REGISTRY:?}/dudoong-ticket:dev"
     container_name: front
     network_mode: "host"
     environment:
@@ -36,14 +36,14 @@ services:
         awslogs-stream: "front"
   admin:
     restart: unless-stopped
-    image: david0218/dudoong-admin:dev
+    image: "${ECR_REGISTRY:?}/dudoong-admin:dev"
     container_name: admin
     network_mode: "host"
     environment:
       - TZ=Asia/Seoul
   internal-admin:
     restart: unless-stopped
-    image: water0641/dudoong-internal-admin:0.7.0
+    image: "${ECR_REGISTRY:?}/dudoong-internal-admin:0.7.0"
     container_name: internal-admin
     network_mode: "host"
     environment:
@@ -56,7 +56,7 @@ services:
       - admin
       - internal-admin
     restart: always
-    image: water0641/dudoong-nginx:1.9.2
+    image: "${ECR_REGISTRY:?}/dudoong-nginx:1.9.2"
     # HTTPS 인증서 (scripts/tls-cert.sh 가 배포 때·매일 갱신, Deploy #37)
     volumes:
       - /home/ubuntu/tls/certs:/etc/nginx/certs:ro
