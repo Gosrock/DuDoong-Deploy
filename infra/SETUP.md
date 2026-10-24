@@ -76,3 +76,31 @@ rm -f ~/prod.env ~/staging.env ~/batch.env && ls ~/*.env 2>/dev/null || echo "�
 - 스테이징 켜기·끄기는 Actions → "Staging Power" (status / start / stop) 에서만. start 는 켠 뒤 main 최신 버전을 배포한다. Deployment(main 머지)는 스테이징이 꺼져 있으면 스테이징 배포를 건너뛴다
 - 배치: `infra/BATCH-RUNBOOK.md`
 - 내부 어드민 스테이징 버튼: 운영 .env(SSM `/dudoong/env/prod`)에 `STAGING_INSTANCE_ID=<스테이징 인스턴스 ID>` 줄을 추가하고 백엔드 새 버전 배포 (dev → v2 DDL 먼저)
+
+## 5. 이미지 비공개 저장소 ECR (Deploy #59)
+
+Docker Hub 공개 이미지 대신 ECR 비공개 저장소에서 받는다. VPC 엔드포인트 없이 IAM 으로만 막는다 (비용: 저장 용량만, 월 $1 안팎).
+
+```bash
+# CloudShell (관리자 계정)
+cf dudoong-ecr ecr.yml   # 저장소 5개 + 서버 pull 정책 + 리포별 push 역할
+```
+
+1. Backend·Admin-Front·Front 리포에도 Repository secret `AWS_ACCOUNT_ID` 등록 (각 리포가 자기 push 역할을 맡는다)
+2. Actions → **Image Copy (Docker Hub → ECR)** 를 입력 없이 실행 → compose 가 쓰는 태그를 전부 복사
+3. 그 뒤 compose 를 ECR 주소로 바꾼 PR 을 머지
+
+| 저장소 | 올리는 곳 | 태그 |
+|---|---|---|
+| dudoong-api | Backend `Api-v*` | 덮어쓰기 불가 |
+| dudoong-batch (batch.yml) | Backend `Batch-v*` | 덮어쓰기 불가 |
+| dudoong-nginx | Deploy `Nginx-v*` | 덮어쓰기 불가 |
+| dudoong-internal-admin | Admin-Front `AdminFront-v*`·`dev` | `dev` 만 덮어쓰기 |
+| dudoong-ticket, dudoong-admin | Front `Ticket-v*`·`Admin-v*`·`dev` | `dev` 만 덮어쓰기 |
+
+- 저장소마다 태그 있는 이미지 최근 10개만 남고, 태그 없는 이미지(덮어쓴 옛 `dev`)는 7일 뒤 지워진다
+- 아직 Docker Hub 에만 올리는 리포가 있으면, 배포 전에 Image Copy 에 `dudoong-ticket:1.3.2` 처럼 넣어 복사한다
+- 버전 태그는 덮어쓸 수 없어 **먼저 올린 이미지가 그 버전이 된다** → 각 리포 Settings → Rules 에 태그 ruleset (`Api-v*`·`Batch-v*`·`AdminFront-v*`·`Nginx-v*`·`Ticket-v*`·`Admin-v*` 생성은 관리자만)
+- 서버에서 compose 를 직접 다룰 때는 레지스트리 값을 같이 넘긴다 (없으면 compose 가 바로 실패):
+  `sudo env ECR_REGISTRY=$(sh ~/srv/ubuntu/scripts/ecr-login.sh) docker-compose -f ~/srv/ubuntu/docker-compose.prod.yml logs -f backend`
+- 배치는 Backend 가 ECR `dudoong-batch` 에 바로 올린다 (Backend #825). `Batch Image Copy` 는 그 전 버전용
