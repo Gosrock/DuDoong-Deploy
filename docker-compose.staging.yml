@@ -8,13 +8,15 @@ services:
     command: redis-server --bind 127.0.0.1 -::1 --protected-mode yes
   backend:
     restart: unless-stopped
-    image: "${ECR_REGISTRY:?}/dudoong-api:2.4.5"
+    image: "${ECR_REGISTRY:?}/dudoong-api:2.4.7"
     container_name: backend
     env_file:
       - .env
     network_mode: "host"
     environment:
       - TZ=Asia/Seoul
+      # staging 프로필 기본 커넥션 풀 20개 → 5개. 운영과 같은 RDS(max_connections 60)를 쓴다 (Deploy #78)
+      - SPRING_DATASOURCE_HIKARI_MAXIMUMPOOLSIZE=5
     logging:
       driver: awslogs
       options:

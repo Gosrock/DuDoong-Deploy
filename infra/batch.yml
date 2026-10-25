@@ -140,6 +140,10 @@ Resources:
           Environment:
             - Name: BATCH_ARGS
               Value: ""
+            # 이미지(prod 프로필) 기본 커넥션 풀은 20개다. 배치는 job 하나씩 순서대로 돌아 5개면 충분하다.
+            # RDS max_connections 60 을 운영 앱(20)·스테이징 앱과 나눠 쓴다 — 2026-10-25 Too many connections 로 배치가 기동 실패 (Deploy #78)
+            - Name: SPRING_DATASOURCE_HIKARI_MAXIMUMPOOLSIZE
+              Value: "5"
           DependsOn:
             - ContainerName: redis
               Condition: HEALTHY
