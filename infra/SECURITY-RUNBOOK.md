@@ -60,7 +60,10 @@ compose 가 `water0641/dudoong-nginx:1.8.0` 을 쓴다. 머지하기 전에 PR �
 
 ## 해외 IP 차단 (Deploy #58)
 
-nginx 가 국내 IP 만 받는다. 그 밖의 IP 는 모든 도메인·경로에서 403 안내 페이지를 받고, 접근 로그에 `geo=0` 으로 남는다 (CloudWatch `dudoong-prod` / `nginx` 스트림).
+**어드민만** 국내 IP 로 제한한다: 호스트 관리자(`/admin/`), 내부 어드민(`/internal-admin/`, `/internal-api`, `internal-admin.dudoong.com`·`staging-internal-admin.dudoong.com` 도메인 전체). 해외 IP 는 이 경로에서 403 안내 페이지를 받고, 접근 로그에 `geo_block=1` 로 남는다 (CloudWatch `dudoong-prod` / `nginx` 스트림). 모든 요청에 `geo=0/1`(국내 여부)도 남는다.
+
+- 티켓 사이트(`/`)와 `/api` 는 막지 않는다 — 해외 관객, 검색엔진·SNS 미리보기, 카카오 챗봇 스킬. 호스트 관리자 화면이 쓰는 호스트 API 도 `/api` 아래라 열려 있다(로그인·호스트 권한 검증으로 보호)
+- 처음 설계(1.9.3)는 모든 경로 차단이었다. 2026-10-25 사용자 결정으로 어드민만으로 줄였다(1.9.4)
 
 - 허용 목록: `nginx/geo/allow-kr.conf` — APNIC KR 할당분 + AWS 서울(ap-northeast-2) EC2 대역. AWS 서울은 미국(ARIN) 등록이라 따로 넣는다(운영·스테이징 EIP, Fargate 배치)
 - 서버 안·사설 대역(localhost, VPC)은 `nginx.conf` 에서 항상 허용 — 배포 헬스체크, 운영 → 스테이징 헬스체크
@@ -81,7 +84,7 @@ git diff --stat nginx/geo/      # 변화량 확인 후 커밋, nginx 이미지 �
 ### 차단 건수 보기 (CloudWatch Logs Insights, 그룹 `dudoong-prod`)
 
 ```
-filter @logStream = "nginx" and @message like /geo=0/
+filter @logStream = "nginx" and @message like /geo_block=1/
 | parse @message /^(?<ip>\S+) .*"(?<method>\S+) (?<path>\S+) /
 | stats count() by ip | sort count() desc | limit 20
 ```
