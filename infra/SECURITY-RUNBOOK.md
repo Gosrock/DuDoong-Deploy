@@ -55,3 +55,40 @@ compose 가 `water0641/dudoong-nginx:1.8.0` 을 쓴다. 머지하기 전에 PR �
 ## 하지 않기로 한 것
 - Redis 비밀번호: 환경변수 추가 부담 대비 효과가 작아 적용하지 않는다(2026-10-10 결정). Redis 는 host 네트워크지만 보안 그룹이 6379 를 외부에 열지 않는다.
 - `/internal-api` 접근 IP 제한: 운영자 접속 환경이 고정되어 있지 않아 적용하지 않는다(2026-10-10 결정). 운영 어드민 보호는 어드민 전용 토큰 분리(Backend #763)로 보강한다.
+
+---
+
+## 해외 IP 차단 (Deploy #58)
+
+**어드민만** 국내 IP 로 제한한다: 호스트 관리자(`/admin/`), 내부 어드민(`/internal-admin/`, `/internal-api`, `internal-admin.dudoong.com`·`staging-internal-admin.dudoong.com` 도메인 전체). 해외 IP 는 이 경로에서 403 안내 페이지를 받고, 접근 로그에 `geo_block=1` 로 남는다 (CloudWatch `dudoong-prod` / `nginx` 스트림). 모든 요청에 `geo=0/1`(국내 여부)도 남는다.
+
+- 티켓 사이트(`/`)와 `/api` 는 막지 않는다 — 해외 관객, 검색엔진·SNS 미리보기, 카카오 챗봇 스킬. 호스트 관리자 화면이 쓰는 호스트 API 도 `/api` 아래라 열려 있다(로그인·호스트 권한 검증으로 보호)
+- 처음 설계(1.9.3)는 모든 경로 차단이었다. 2026-10-25 사용자 결정으로 어드민만으로 줄였다(1.9.4)
+
+- 허용 목록: `nginx/geo/allow-kr.conf` — APNIC KR 할당분 + AWS 서울(ap-northeast-2) EC2 대역. AWS 서울은 미국(ARIN) 등록이라 따로 넣는다(운영·스테이징 EIP, Fargate 배치)
+- 서버 안·사설 대역(localhost, VPC)은 `nginx.conf` 에서 항상 허용 — 배포 헬스체크, 운영 → 스테이징 헬스체크
+- TLS 점검 워크플로(GitHub 러너, 해외)는 핸드셰이크만 하므로 영향 없음
+
+### 목록 갱신 (분기 1회 권장)
+
+```sh
+python3 scripts/gen-geo-kr.py   # 목록이 비정상적으로 작으면 파일을 쓰지 않고 실패한다
+git diff --stat nginx/geo/      # 변화량 확인 후 커밋, nginx 이미지 새 태그로 빌드·배포
+```
+
+### 예외 추가 (해외 출장 등)
+
+`nginx/geo/allow-extra.conf` 에 `<IP>/32 1;  # 사유·기한` 한 줄 추가 → nginx 이미지 새 태그 → 배포. 기한이 지나면 지운다.
+퍼블릭 리포라 커밋한 IP 는 공개된다 — 사유에는 이름 대신 역할만 적는다.
+
+### 차단 건수 보기 (CloudWatch Logs Insights, 그룹 `dudoong-prod`)
+
+```
+filter @logStream = "nginx" and @message like /geo_block=1/
+| parse @message /^(?<ip>\S+) .*"(?<method>\S+) (?<path>\S+) /
+| stats count() by ip | sort count() desc | limit 20
+```
+
+### 되돌리기
+
+compose 의 nginx 이미지를 `1.9.2` 로 되돌려 배포한다.
