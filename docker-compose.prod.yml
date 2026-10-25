@@ -23,7 +23,7 @@ services:
         awslogs-stream: "backend"
   front:
     restart: unless-stopped
-    image: "${ECR_REGISTRY:?}/dudoong-ticket:1.4.0"
+    image: "${ECR_REGISTRY:?}/dudoong-ticket:1.4.1"
     container_name: front
     network_mode: "host"
     environment:
