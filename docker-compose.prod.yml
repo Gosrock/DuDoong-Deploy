@@ -8,7 +8,7 @@ services:
     command: redis-server --bind 127.0.0.1 -::1 --protected-mode yes
   backend:
     restart: unless-stopped
-    image: "${ECR_REGISTRY:?}/dudoong-api:2.4.5"
+    image: "${ECR_REGISTRY:?}/dudoong-api:2.4.6"
     container_name: backend
     env_file:
       - .env
@@ -23,7 +23,7 @@ services:
         awslogs-stream: "backend"
   front:
     restart: unless-stopped
-    image: "${ECR_REGISTRY:?}/dudoong-ticket:1.4.2"
+    image: "${ECR_REGISTRY:?}/dudoong-ticket:1.4.3"
     container_name: front
     network_mode: "host"
     environment:
