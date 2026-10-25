@@ -8,7 +8,7 @@ services:
     command: redis-server --bind 127.0.0.1 -::1 --protected-mode yes
   backend:
     restart: unless-stopped
-    image: "${ECR_REGISTRY:?}/dudoong-api:2.3.3"
+    image: "${ECR_REGISTRY:?}/dudoong-api:2.4.0"
     container_name: backend
     env_file:
       - .env
@@ -43,7 +43,7 @@ services:
       - TZ=Asia/Seoul
   internal-admin:
     restart: unless-stopped
-    image: "${ECR_REGISTRY:?}/dudoong-internal-admin:0.7.0"
+    image: "${ECR_REGISTRY:?}/dudoong-internal-admin:0.9.0"
     container_name: internal-admin
     network_mode: "host"
     environment:
