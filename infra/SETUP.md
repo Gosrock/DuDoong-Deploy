@@ -83,10 +83,10 @@ Docker Hub 공개 이미지 대신 ECR 비공개 저장소에서 받는다. VPC 
 
 ```bash
 # CloudShell (관리자 계정)
-cf dudoong-ecr ecr.yml   # 저장소 5개 + 서버 pull 정책 + 리포별 push 역할
+cf dudoong-ecr ecr.yml   # 저장소 6개 + 서버 pull 정책 + 리포별 push 역할
 ```
 
-1. Backend·Admin-Front·Front 리포에도 Repository secret `AWS_ACCOUNT_ID` 등록 (각 리포가 자기 push 역할을 맡는다)
+1. Backend·Admin-Front·Front·dudoong-frontend-v2 리포에도 Repository secret `AWS_ACCOUNT_ID` 등록 (각 리포가 자기 push 역할을 맡는다)
 2. Actions → **Image Copy (Docker Hub → ECR)** 를 입력 없이 실행 → compose 가 쓰는 태그를 전부 복사
 3. 그 뒤 compose 를 ECR 주소로 바꾼 PR 을 머지
 
@@ -97,6 +97,7 @@ cf dudoong-ecr ecr.yml   # 저장소 5개 + 서버 pull 정책 + 리포별 push 
 | dudoong-nginx | Deploy `Nginx-v*` | 덮어쓰기 불가 |
 | dudoong-internal-admin | Admin-Front `AdminFront-v*`·`dev` | `dev` 만 덮어쓰기 |
 | dudoong-ticket, dudoong-admin | Front `Ticket-v*`·`Admin-v*`·`dev` | `dev` 만 덮어쓰기 |
+| dudoong-front | v2 프론트(`dudoong-frontend-v2`) `v*`·`main`(→ `dev`) (#84) | `dev` 만 덮어쓰기 |
 
 - 저장소마다 태그 있는 이미지 최근 10개만 남고, 태그 없는 이미지(덮어쓴 옛 `dev`)는 7일 뒤 지워진다
 - 아직 Docker Hub 에만 올리는 리포가 있으면, 배포 전에 Image Copy 에 `dudoong-ticket:1.3.2` 처럼 넣어 복사한다
