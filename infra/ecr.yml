@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   운영 이미지 비공개 저장소 (Deploy #59). Docker Hub 공개 이미지를 ECR 로 옮긴다.
-  - 저장소 5개: 버전 태그는 덮어쓰기 불가, 스테이징용 dev 태그만 예외. 최근 10개만 남긴다
+  - 저장소 6개 (v2 프론트 dudoong-front 추가, Deploy #84): 버전 태그는 덮어쓰기 불가, 스테이징용 dev 태그만 예외. 최근 10개만 남긴다
   - 받기(pull): 운영·스테이징 EC2 인스턴스 역할만 (IMDSv2 자격 증명만)
   - 올리기(push): 이미지를 만드는 리포의 GitHub Actions 만 (OIDC, 리포·태그별 자기 저장소만)
   비용: VPC 엔드포인트 없이 퍼블릭 엔드포인트 + IAM 으로만 막는다. 같은 리전 ECR→EC2 전송·기본 스캔 무료 → 저장 용량만
@@ -10,7 +10,7 @@ Description: >
 #   aws cloudformation deploy --stack-name dudoong-ecr \
 #     --template-file infra/ecr.yml --capabilities CAPABILITY_NAMED_IAM
 # dudoong-batch 저장소는 배치 스택(batch.yml)이 이미 만든다 → 여기서는 Backend 푸시 권한만 준다.
-# 워크플로는 역할 이름과 리포지토리 secret AWS_ACCOUNT_ID 로 ARN 을 만든다 (Backend·Admin-Front·Front 리포에도 secret 등록 필요).
+# 워크플로는 역할 이름과 리포지토리 secret AWS_ACCOUNT_ID 로 ARN 을 만든다 (Backend·Admin-Front·Front·dudoong-frontend-v2 리포에도 secret 등록 필요).
 
 Parameters:
   InstanceRoleName:
@@ -104,7 +104,23 @@ Resources:
       LifecyclePolicy:
         LifecyclePolicyText: !FindInMap [Lifecycle, Policy, Text]
 
-  # 받기: 운영·스테이징 서버 (scripts/ecr-login.sh 가 배포 때 로그인). 저장소 5개 읽기만
+  # v2 프론트 (Gosrock/dudoong-frontend-v2, Deploy #84). 스테이징은 main 빌드가 dev 태그를 덮어쓴다
+  FrontV2Repository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: dudoong-front
+      ImageTagMutability: IMMUTABLE_WITH_EXCLUSION
+      ImageTagMutabilityExclusionFilters:
+        - ImageTagMutabilityExclusionFilterType: WILDCARD
+          ImageTagMutabilityExclusionFilterValue: dev
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: !FindInMap [Lifecycle, Policy, Text]
+
+  # 받기: 운영·스테이징 서버 (scripts/ecr-login.sh 가 배포 때 로그인). 저장소 6개 읽기만
   ServerPullPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -133,6 +149,7 @@ Resources:
               - !GetAtt InternalAdminRepository.Arn
               - !GetAtt TicketRepository.Arn
               - !GetAtt AdminRepository.Arn
+              - !GetAtt FrontV2Repository.Arn
             # 조건 없음: 실제 pull 은 docker 데몬이 로그인 토큰으로 한다. 토큰 발급(위)에서 IMDSv2 로 막는다
 
   # 올리기: 리포마다 역할 하나, 자기 저장소에만. 버전 태그 push 와 스테이징 dev 브랜치 job 만 맡는다
@@ -260,6 +277,47 @@ Resources:
                 Resource:
                   - !GetAtt TicketRepository.Arn
                   - !GetAtt AdminRepository.Arn
+
+  # v2 프론트 리포 (Deploy #84). main(→ dev 태그, main 에서의 수동 실행 포함)과 버전 태그만.
+  # 다른 브랜치는 열지 않는다 — 아무 브랜치나 스테이징(dev)을 덮어쓰게 되므로 스테이징은 main 머지 뒤에만 올린다
+  FrontV2PushRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dudoong-github-ecr-front-v2
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOrg}/dudoong-frontend-v2:ref:refs/tags/v*
+                  - !Sub repo:${GitHubOrg}/dudoong-frontend-v2:ref:refs/heads/main
+      Policies:
+        - PolicyName: ecr-push
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:DescribeImages
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource: !GetAtt FrontV2Repository.Arn
 
   # 이 리포: nginx 빌드(Nginx-v* 태그) + 이미지 복사(DuDoong-Infra 승인 job, Docker Hub → ECR)
   DeployPushRole:
