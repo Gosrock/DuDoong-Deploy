@@ -3,6 +3,8 @@ name: Staging Deploy
 # 스테이징이 켜져 있을 때만 배포한다. 꺼져 있으면 건너뛴다 (스테이징을 켜지 않는다).
 on:
   workflow_call:
+  # 스테이징만 다시 배포 (Deploy #92)
+  workflow_dispatch:
 
 permissions:
   contents: read
