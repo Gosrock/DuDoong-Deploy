@@ -34,9 +34,25 @@ echo "== 헬스체크 (최대 10분)"
 for i in $(seq 1 60); do
   code=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' http://localhost/api/v1/examples/health || true)
   echo "try $i: $code"
-  [ "$code" = "200" ] && exit 0
+  [ "$code" = "200" ] && break
   sleep 10
 done
-echo "$NAME health check failed"
-sudo docker ps --format '{{.Names}}\t{{.Status}}'
-exit 1
+if [ "$code" != "200" ]; then
+  echo "$NAME health check failed"
+  sudo docker ps --format '{{.Names}}\t{{.Status}}'
+  exit 1
+fi
+
+# front v2(Next standalone)는 루프백 3000 의 /healthz 로 본다 (Deploy #92). v1 front(dudoong-ticket)에는 이 경로가 없어 건너뛴다
+if grep -q 'dudoong-front:' "$DIR/$COMPOSE"; then
+  echo "== front 헬스체크 (최대 2분)"
+  for i in $(seq 1 12); do
+    fcode=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/healthz || true)
+    echo "front try $i: $fcode"
+    [ "$fcode" = "200" ] && exit 0
+    sleep 10
+  done
+  echo "$NAME front health check failed"
+  sudo docker ps --format '{{.Names}}\t{{.Status}}'
+  exit 1
+fi
