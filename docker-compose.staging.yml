@@ -25,11 +25,23 @@ services:
         awslogs-stream: "backend"
   front:
     restart: unless-stopped
-    image: "${ECR_REGISTRY:?}/dudoong-ticket:dev"
+    # v2 프론트 (Deploy #92). 운영은 컷오버 전까지 v1(dudoong-ticket)
+    image: "${ECR_REGISTRY:?}/dudoong-front:dev"
     container_name: front
     network_mode: "host"
+    # 종료 신호를 Node 에 제대로 넘긴다
+    init: true
     environment:
       - TZ=Asia/Seoul
+      # Next standalone 은 IPv4 루프백에서만 듣는다 (이미지 ENV 와 같은 값 — 명시)
+      - HOSTNAME=127.0.0.1
+      - PORT=3000
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
     logging:
       driver: awslogs
       options:
@@ -58,7 +70,7 @@ services:
       - admin
       - internal-admin
     restart: always
-    image: "${ECR_REGISTRY:?}/dudoong-nginx:1.9.5"
+    image: "${ECR_REGISTRY:?}/dudoong-nginx:1.9.6"
     # HTTPS 인증서 (scripts/tls-cert.sh 가 배포 때·매일 갱신, Deploy #37)
     volumes:
       - /home/ubuntu/tls/certs:/etc/nginx/certs:ro
