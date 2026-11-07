@@ -2,10 +2,14 @@ version: "3.7"
 services:
   redis:
     restart: unless-stopped
-    image: "redis:alpine"
+    # 버전을 고정한다 — 떠 있는 태그(redis:alpine)면 배포의 compose pull 이 새 이미지를 받아 컨테이너를 다시 만들어 데이터가 사라졌다 (Deploy #117)
+    image: "redis:8.10.3-alpine"
     network_mode: "host"
     # 서버 안(백엔드 REDIS_HOST=localhost)에서만 붙게 루프백에만 연다 (Deploy #48). ::1 은 IPv6 가 없어도 뜨게 "-" 로 선택 바인드
-    command: redis-server --bind 127.0.0.1 -::1 --protected-mode yes
+    # appendonly + 볼륨: 컨테이너를 다시 만들어도 리프레시 토큰 세션이 남는다 (Deploy #117)
+    command: redis-server --bind 127.0.0.1 -::1 --protected-mode yes --appendonly yes
+    volumes:
+      - redis-data:/data
   backend:
     restart: unless-stopped
     image: "${ECR_REGISTRY:?}/dudoong-api:2.5.11"
@@ -82,3 +86,6 @@ services:
         awslogs-group: "dudoong-staging"
         awslogs-region: "ap-northeast-2"
         awslogs-stream: "nginx"
+
+volumes:
+  redis-data:
