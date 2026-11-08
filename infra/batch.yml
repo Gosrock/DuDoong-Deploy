@@ -205,13 +205,13 @@ Resources:
       QueueName: dudoong-batch-scheduler-dlq
       MessageRetentionPeriod: 1209600
 
-  # Jenkins "이벤트_만료처리" (H/30 19-22) 대체
+  # 공연 마감 = 입장 마감 (v2 체크인은 CLOSED 공연을 막음). 늦게 끝나는 공연도 입장받게 22·23시 두 번 (#119)
   EventExpirationSchedule:
     Type: AWS::Scheduler::Schedule
     Properties:
       Name: dudoong-batch-event-expiration
-      Description: 이벤트_자동만료 — 19~22시 30분마다 (KST)
-      ScheduleExpression: cron(0,30 19-22 * * ? *)
+      Description: 이벤트_자동만료 — 매일 22:00·23:00 (KST)
+      ScheduleExpression: cron(0 22,23 * * ? *)
       ScheduleExpressionTimezone: Asia/Seoul
       FlexibleTimeWindow:
         Mode: "OFF"
